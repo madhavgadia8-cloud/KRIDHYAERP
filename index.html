@@ -957,6 +957,14 @@ views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
       <div class="fld-row"><div class="fld"><label>Worker URL</label><input id="cl_url" value="${esc(cloudCfg().url||'')}" placeholder="https://kridhya-sync.<you>.workers.dev"></div><div class="fld"><label>Sync Code (keep private)</label><input id="cl_ns" value="${esc(cloudCfg().ns||'')}" placeholder="a long private code"><div class="hint"><a onclick="document.getElementById('cl_ns').value='kridhya-'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2)" style="color:var(--plum);cursor:pointer">generate a code</a> · use the SAME code everywhere</div></div></div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0 14px"><input type="checkbox" id="cl_on" ${cloudCfg().on?'checked':''}> Enable automatic cloud sync</label>
       <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn gold" onclick="saveCloudAndConnect()">Save &amp; Connect</button><button class="btn ghost" onclick="cloudForcePush()">⬆ Push to cloud</button><button class="btn ghost" onclick="cloudForcePull()">⬇ Pull from cloud</button></div>
+    </div></div>
+    <div class="card" style="margin-top:18px"><div class="panel-h"><h3>🔒 Login &amp; Security</h3><span class="hint">${authOn()?'lock is ON':'lock is off'}</span></div><div style="padding:20px">
+      <p class="hint" style="margin-top:0">Require a <b>Login ID &amp; password</b> before the ERP opens. If you ever forget the password, you can log in with a <b>one-time code sent to your email</b>. Email OTP needs Cloud Sync connected (it uses the same secure link).</p>
+      <div class="fld-row"><div class="fld"><label>Login ID</label><input id="au_user" value="${esc(authCfg().user||'')}" placeholder="e.g. devanshi"></div><div class="fld"><label>Owner Email <span class="hint">(receives OTP)</span></label><input id="au_email" value="${esc(authCfg().email||'')}" placeholder="you@gmail.com"></div></div>
+      <div class="fld-row"><div class="fld"><label>${authCfg().hash?'New Password <span class="hint">(leave blank to keep)</span>':'Password'}</label><input id="au_p1" type="password" placeholder="6+ characters" autocomplete="new-password"></div><div class="fld"><label>Confirm Password</label><input id="au_p2" type="password" placeholder="repeat password" autocomplete="new-password"></div></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0 14px"><input type="checkbox" id="au_on" ${authCfg().on?'checked':''}> Require login on every device</label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn gold" onclick="saveAuth()">Save login settings</button>${authOn()?'<button class="btn ghost" onclick="lockNow()">🔒 Lock now</button>':''}</div>
+      <p class="hint" style="margin-bottom:0;margin-top:14px">⚠️ This is a screen lock to keep casual users out — your data’s real privacy comes from your Sync Code. Never share either.</p>
     </div></div>`;
 };
 function saveSettings(){const g=i=>$('#'+i).value;Object.assign(DB.company,{name:g('co_name'),tagline:g('co_tag'),phone:g('co_phone'),email:g('co_email'),address:g('co_addr'),gstin:g('co_gstin'),state:g('co_state'),gstRate:+g('co_gst')||0,invPrefix:g('co_invp'),currency:g('co_cur')||'₹',bankName:g('co_bank'),accountNo:g('co_acc'),ifsc:g('co_ifsc'),upi:g('co_upi'),openingCash:+g('co_ocash')||0,openingInventory:+g('co_oinv')||0,logo:_logoImg});save();toast('Settings saved');go('settings');}
@@ -969,11 +977,104 @@ function confirmBox(title,msg,onYes){openModal(`<div class="modal-h"><h3>${esc(t
   <div class="modal-b"><p style="margin:0;color:var(--muted)">${msg?esc(msg):'Are you sure?'}</p></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn danger" id="cf_yes">Yes, continue</button></div>`);$('#cf_yes').onclick=()=>{closeModal();onYes();};}
 
+/* ============================ AUTH / LOGIN ============================ */
+const AUTH_SESS='kridhya_auth_sess';
+function authCfg(){return (DB.company&&DB.company.auth)||{};}
+function authOn(){const a=authCfg();return !!(a.on&&a.hash);}
+async function sha256(s){const b=new TextEncoder().encode(s);const h=await crypto.subtle.digest('SHA-256',b);return Array.from(new Uint8Array(h)).map(x=>x.toString(16).padStart(2,'0')).join('');}
+function sessOk(){try{const s=JSON.parse(localStorage.getItem(AUTH_SESS)||'{}');return !!(s.exp&&Date.now()<s.exp);}catch(e){return false;}}
+function setSess(){localStorage.setItem(AUTH_SESS,JSON.stringify({exp:Date.now()+30*864e5}));}
+function lockNow(){localStorage.removeItem(AUTH_SESS);location.reload();}
+async function saveAuth(){
+  const user=$('#au_user').value.trim(), email=$('#au_email').value.trim();
+  const p1=$('#au_p1').value, p2=$('#au_p2').value, on=$('#au_on').checked;
+  const cur=authCfg(); let hash=cur.hash||'', salt=cur.salt||'';
+  if(p1||p2){
+    if(p1.length<6){toast('Password must be at least 6 characters');return;}
+    if(p1!==p2){toast('Passwords do not match');return;}
+    salt=Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
+    hash=await sha256(salt+':'+p1);
+  }
+  if(on&&!hash){toast('Set a password first');return;}
+  if(on&&!user){toast('Enter a Login ID');return;}
+  DB.company.auth={on,user,email,hash,salt};save();
+  toast(on?'Login enabled — it will be asked on every device':'Login settings saved');
+  go('settings');
+}
+function maskEmail(e){if(!e||e.indexOf('@')<0)return'your email';const p=e.split('@');return p[0].slice(0,2)+'•••@'+p[1];}
+function lockScreen(){
+  const a=authCfg();
+  const canOtp=!!(cloudCfg().on&&cloudCfg().url&&cloudCfg().ns&&a.email);
+  const w=document.createElement('div');w.id='lockWrap';
+  w.setAttribute('style','position:fixed;inset:0;z-index:99999;background:linear-gradient(135deg,#2e1f47,#4a3168);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit');
+  w.innerHTML=`<div style="background:#fff;border-radius:18px;max-width:420px;width:100%;padding:30px 28px;box-shadow:0 20px 60px rgba(0,0,0,.35)">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px"><span style="background:#c9a227;color:#fff;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px">K</span><div><div style="font-size:20px;font-weight:700;color:#2e1f47">Kridhya</div><div style="font-size:11px;letter-spacing:1px;color:#8a7fa0">ARTIFICIAL JEWELLERY · ERP</div></div></div>
+    <p id="lk_msg" style="color:#6b6180;font-size:13px;margin:14px 0 18px">Please sign in to continue.</p>
+    <div id="lk_pw">
+      <label style="font-size:12px;color:#6b6180;display:block;margin-bottom:4px">Login ID</label>
+      <input id="lk_user" autocomplete="username" style="width:100%;padding:11px 12px;border:1px solid #ddd6e8;border-radius:9px;font-size:14px;margin-bottom:12px;box-sizing:border-box">
+      <label style="font-size:12px;color:#6b6180;display:block;margin-bottom:4px">Password</label>
+      <input id="lk_pass" type="password" autocomplete="current-password" style="width:100%;padding:11px 12px;border:1px solid #ddd6e8;border-radius:9px;font-size:14px;margin-bottom:16px;box-sizing:border-box">
+      <button id="lk_go" style="width:100%;padding:12px;background:#c9a227;color:#fff;border:0;border-radius:9px;font-size:15px;font-weight:600;cursor:pointer">Sign in</button>
+      ${canOtp?`<div style="text-align:center;margin-top:14px"><a id="lk_useotp" style="color:#5b3fa0;font-size:13px;cursor:pointer;text-decoration:underline">Forgot password? Email me a code</a></div>`:`<p style="color:#a09aae;font-size:11.5px;margin:14px 0 0;text-align:center">Tip: connect Cloud Sync + set an owner email to enable OTP login.</p>`}
+    </div>
+    <div id="lk_otp" style="display:none">
+      <p style="color:#6b6180;font-size:13px;margin:0 0 14px">We'll email a 6-digit code to <b>${esc(maskEmail(a.email))}</b>.</p>
+      <button id="lk_send" style="width:100%;padding:12px;background:#5b3fa0;color:#fff;border:0;border-radius:9px;font-size:15px;font-weight:600;cursor:pointer">Send code</button>
+      <div id="lk_codewrap" style="display:none;margin-top:14px">
+        <label style="font-size:12px;color:#6b6180;display:block;margin-bottom:4px">Enter the 6-digit code</label>
+        <input id="lk_code" inputmode="numeric" maxlength="6" style="width:100%;padding:11px 12px;border:1px solid #ddd6e8;border-radius:9px;font-size:18px;letter-spacing:6px;text-align:center;margin-bottom:12px;box-sizing:border-box">
+        <button id="lk_verify" style="width:100%;padding:12px;background:#c9a227;color:#fff;border:0;border-radius:9px;font-size:15px;font-weight:600;cursor:pointer">Verify &amp; sign in</button>
+      </div>
+      <div style="text-align:center;margin-top:14px"><a id="lk_usepw" style="color:#5b3fa0;font-size:13px;cursor:pointer;text-decoration:underline">← Back to password</a></div>
+    </div>
+  </div>`;
+  document.body.appendChild(w);
+  const msg=(t,bad)=>{const m=w.querySelector('#lk_msg');m.textContent=t;m.style.color=bad?'#c0392b':'#6b6180';};
+  const tryPw=async()=>{
+    const u=w.querySelector('#lk_user').value.trim(), p=w.querySelector('#lk_pass').value;
+    const h=await sha256((a.salt||'')+':'+p);
+    if(u===(a.user||'')&&h===a.hash){setSess();w.remove();bootApp();}
+    else msg('Wrong Login ID or password. Try again.',true);
+  };
+  w.querySelector('#lk_go').onclick=tryPw;
+  w.querySelector('#lk_pass').onkeydown=e=>{if(e.key==='Enter')tryPw();};
+  w.querySelector('#lk_user').onkeydown=e=>{if(e.key==='Enter')w.querySelector('#lk_pass').focus();};
+  if(canOtp){
+    w.querySelector('#lk_useotp').onclick=()=>{w.querySelector('#lk_pw').style.display='none';w.querySelector('#lk_otp').style.display='block';msg('Sign in with a one-time email code.');};
+    w.querySelector('#lk_usepw').onclick=()=>{w.querySelector('#lk_otp').style.display='none';w.querySelector('#lk_pw').style.display='block';msg('Please sign in to continue.');};
+    w.querySelector('#lk_send').onclick=async()=>{
+      const b=w.querySelector('#lk_send');b.disabled=true;b.textContent='Sending…';
+      try{
+        const r=await fetch(cloudCfg().url.replace(/\/$/,'')+'/otp?ns='+encodeURIComponent(cloudCfg().ns),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+        const j=await r.json();
+        if(j.ok){w.querySelector('#lk_codewrap').style.display='block';msg('Code sent. Check your email (and spam).');b.textContent='Resend code';}
+        else{msg(j.error||'Could not send the code.',true);b.textContent='Send code';}
+      }catch(e){msg('Network problem sending the code.',true);b.textContent='Send code';}
+      b.disabled=false;
+    };
+    w.querySelector('#lk_verify').onclick=async()=>{
+      const code=w.querySelector('#lk_code').value.trim();
+      if(code.length!==6){msg('Enter the 6-digit code.',true);return;}
+      try{
+        const r=await fetch(cloudCfg().url.replace(/\/$/,'')+'/otp/verify?ns='+encodeURIComponent(cloudCfg().ns),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+        const j=await r.json();
+        if(j.ok){setSess();w.remove();bootApp();}
+        else msg(j.error||'That code is not valid.',true);
+      }catch(e){msg('Network problem verifying the code.',true);}
+    };
+  }
+  setTimeout(()=>{const u=w.querySelector('#lk_user');if(u)u.focus();},60);
+}
+
 /* ============================ INIT ============================ */
+function bootApp(){
 go('dashboard');
 if(cloudCfg().on)cloudStatus('☁ connecting…');else cloudStatus('local only');
 cloudInit();
 window.addEventListener('focus',()=>{if(cloudCfg().on)cloudPull(true).then(ch=>{if(ch)reRender();});});
+}
+if(authOn()&&!sessOk())lockScreen();else bootApp();
 </script>
 </body>
 </html>
