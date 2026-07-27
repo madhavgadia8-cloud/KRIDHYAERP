@@ -300,7 +300,8 @@ function gstReport(){let oc=0,os=0,oi=0,ic=0,is=0,ii=0;DB.sales.forEach(i=>{cons
 
 /* ============================ ROUTER ============================ */
 const views={};
-function go(v){document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active',a.dataset.view===v));views[v]();}
+function go(v){if(typeof can==='function'&&authOn()&&!can(v)){toast('You do not have access to that page');v='dashboard';}
+document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active',a.dataset.view===v));views[v]();}
 $('#nav').addEventListener('click',e=>{const a=e.target.closest('a');if(a&&a.dataset.view)go(a.dataset.view);});
 function header(title,sub,btns){return `<div class="topbar"><div><h2>${title}</h2><div class="sub">${sub}</div></div><div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">${btns||''}</div></div>`;}
 function statusPill(s){const m={'Paid':'green','Unpaid':'red','Partial':'amber','Received':'green','Ordered':'blue','Draft':'grey'};return `<span class="pill ${m[s]||'grey'}">${s}</span>`;}
@@ -965,8 +966,49 @@ views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0 14px"><input type="checkbox" id="au_on" ${authCfg().on?'checked':''}> Require login on every device</label>
       <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn gold" onclick="saveAuth()">Save login settings</button>${authOn()?'<button class="btn ghost" onclick="lockNow()">🔒 Lock now</button>':''}</div>
       <p class="hint" style="margin-bottom:0;margin-top:14px">⚠️ This is a screen lock to keep casual users out — your data’s real privacy comes from your Sync Code. Never share either.</p>
+    </div></div>
+    <div class="card" style="margin-top:18px"><div class="panel-h"><h3>👥 Users &amp; Roles</h3><span class="hint">${allUsers().length} user(s)</span></div><div style="padding:20px">
+      <p class="hint" style="margin-top:0">Give each person their own login. <b>Owner</b> — ${ROLE_HELP.owner} <b>Manager</b> — ${ROLE_HELP.manager} <b>Staff</b> — ${ROLE_HELP.staff}</p>
+      <div style="overflow:auto"><table class="tbl"><thead><tr><th>Name</th><th>Login ID</th><th>Email</th><th>Role</th><th></th></tr></thead><tbody>
+      ${allUsers().map(u=>`<tr><td><b>${esc(u.name||u.user)}</b></td><td>${esc(u.user)}</td><td>${esc(u.email||'—')}</td><td><span class="pill">${ROLES[u.role||'owner']}</span></td><td style="text-align:right">${u.id==='owner0'?'<span class="hint">main owner</span>':`<button class="btn ghost sm" onclick="editUser('${u.id}')">Edit</button> <button class="btn ghost sm" onclick="delUser('${u.id}')">Remove</button>`}</td></tr>`).join('')}
+      </tbody></table></div>
+      <button class="btn gold" style="margin-top:14px" onclick="userModal()">+ Add User</button>
     </div></div>`;
 };
+function userModal(id){
+  const u=(DB.company.users||[]).find(x=>x.id===id)||{};
+  openModal(`<div class="modal-h"><h3>${id?'Edit User':'Add User'}</h3><button class="x" onclick="closeModal()">×</button></div>
+  <div class="modal-b">
+    <div class="fld-row"><div class="fld"><label>Full Name</label><input id="u_name" value="${esc(u.name||'')}" placeholder="e.g. Priya Sharma"></div><div class="fld"><label>Login ID</label><input id="u_user" value="${esc(u.user||'')}" placeholder="e.g. priya"></div></div>
+    <div class="fld"><label>Email <span class="hint">(for OTP login)</span></label><input id="u_email" value="${esc(u.email||'')}" placeholder="name@gmail.com"></div>
+    <div class="fld"><label>Role</label><select id="u_role">${Object.keys(ROLES).map(r=>`<option value="${r}" ${(u.role||'staff')===r?'selected':''}>${ROLES[r]}</option>`).join('')}</select><div class="hint" id="u_rolehelp"></div></div>
+    <div class="fld-row"><div class="fld"><label>${u.hash?'New Password <span class="hint">(blank = keep)</span>':'Password'}</label><input id="u_p1" type="password" placeholder="6+ characters"></div><div class="fld"><label>Confirm</label><input id="u_p2" type="password" placeholder="repeat"></div></div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveUser('${id||''}')">Save User</button></div>`);
+  const h=()=>{$('#u_rolehelp').textContent=ROLE_HELP[$('#u_role').value]||'';};
+  $('#u_role').onchange=h;h();
+}
+function editUser(id){userModal(id);}
+async function saveUser(id){
+  const name=$('#u_name').value.trim(), user=$('#u_user').value.trim(), email=$('#u_email').value.trim(), role=$('#u_role').value;
+  const p1=$('#u_p1').value, p2=$('#u_p2').value;
+  if(!name||!user){toast('Enter a name and a Login ID');return;}
+  if(allUsers().some(x=>x.user.toLowerCase()===user.toLowerCase()&&x.id!==id)){toast('That Login ID is already taken');return;}
+  DB.company.users=DB.company.users||[];
+  const ex=DB.company.users.find(x=>x.id===id);
+  let hash=ex?ex.hash:'', salt=ex?ex.salt:'';
+  if(p1||p2||!ex){
+    if(p1.length<6){toast('Password must be at least 6 characters');return;}
+    if(p1!==p2){toast('Passwords do not match');return;}
+    salt=Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
+    hash=await sha256(salt+':'+p1);
+  }
+  if(ex)Object.assign(ex,{name,user,email,role,hash,salt});
+  else DB.company.users.push({id:uid('u'),name,user,email,role,hash,salt});
+  save();closeModal();toast('User saved');go('settings');
+}
+function delUser(id){const u=(DB.company.users||[]).find(x=>x.id===id);if(!u)return;
+  confirmBox('Remove '+(u.name||u.user)+'?','They will no longer be able to sign in.',()=>{DB.company.users=DB.company.users.filter(x=>x.id!==id);save();toast('User removed');go('settings');});}
 function saveSettings(){const g=i=>$('#'+i).value;Object.assign(DB.company,{name:g('co_name'),tagline:g('co_tag'),phone:g('co_phone'),email:g('co_email'),address:g('co_addr'),gstin:g('co_gstin'),state:g('co_state'),gstRate:+g('co_gst')||0,invPrefix:g('co_invp'),currency:g('co_cur')||'₹',bankName:g('co_bank'),accountNo:g('co_acc'),ifsc:g('co_ifsc'),upi:g('co_upi'),openingCash:+g('co_ocash')||0,openingInventory:+g('co_oinv')||0,logo:_logoImg});save();toast('Settings saved');go('settings');}
 function exportData(){DB.company.lastBackup=new Date().toISOString().slice(0,10);save();const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='kridhya-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();toast('Backup downloaded');}
 function importData(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.products)throw 0;DB=migrate(d);save();toast('Data imported');go('dashboard');}catch(e){toast('Invalid backup file');}};r.readAsText(f);}
@@ -980,10 +1022,35 @@ function confirmBox(title,msg,onYes){openModal(`<div class="modal-h"><h3>${esc(t
 /* ============================ AUTH / LOGIN ============================ */
 const AUTH_SESS='kridhya_auth_sess';
 function authCfg(){return (DB.company&&DB.company.auth)||{};}
-function authOn(){const a=authCfg();return !!(a.on&&a.hash);}
+function authOn(){const a=authCfg();return !!(a.on&&(a.hash||(DB.company.users||[]).length));}
+/* ---- users & roles ---- */
+const ROLES={owner:'Owner',manager:'Manager',staff:'Staff'};
+const ROLE_HELP={owner:'Full access — everything including Settings, deleting records and accounting.',manager:'All daily work + reports. Cannot open Settings or delete records.',staff:'Sales, inquiries and viewing stock only. No profit, costs or accounting.'};
+const STAFF_BLOCKED=['accounting','reports','settings','expenses','purchases','grn','suppliers'];
+const MANAGER_BLOCKED=['settings'];
+function allUsers(){
+  const list=(DB.company.users||[]).slice();
+  const a=authCfg();
+  if(a.user&&!list.some(u=>u.user.toLowerCase()===a.user.toLowerCase()))
+    list.unshift({id:'owner0',name:a.user,user:a.user,email:a.email||'',role:'owner',hash:a.hash,salt:a.salt});
+  return list;
+}
+function curUser(){try{const s=JSON.parse(localStorage.getItem(AUTH_SESS)||'{}');return allUsers().find(u=>u.user.toLowerCase()===String(s.u||'').toLowerCase())||null;}catch(e){return null;}}
+function myRole(){const u=curUser();return u?(u.role||'owner'):'owner';}
+function can(view){const r=myRole();if(r==='owner')return true;if(r==='manager')return !MANAGER_BLOCKED.includes(view);return !STAFF_BLOCKED.includes(view);}
+function canSeeMoney(){return myRole()!=='staff';}
+function applyRoleUI(){
+  if(!authOn())return;
+  document.querySelectorAll('#nav a').forEach(a=>{a.style.display=can(a.dataset.view)?'':'none';});
+  const r=myRole(),u=curUser();
+  let b=document.getElementById('whoami');
+  if(!b){b=document.createElement('div');b.id='whoami';document.body.appendChild(b);}
+  b.setAttribute('style','position:fixed;right:14px;bottom:12px;z-index:900;background:#2e1f47;color:#fff;border-radius:20px;padding:7px 14px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.25);display:flex;gap:10px;align-items:center');
+  b.innerHTML=`<span>👤 ${esc(u?(u.name||u.user):'')} · ${ROLES[r]||r}</span><a onclick="lockNow()" style="color:#e8c96a;cursor:pointer;text-decoration:underline">Sign out</a>`;
+}
 async function sha256(s){const b=new TextEncoder().encode(s);const h=await crypto.subtle.digest('SHA-256',b);return Array.from(new Uint8Array(h)).map(x=>x.toString(16).padStart(2,'0')).join('');}
-function sessOk(){try{const s=JSON.parse(localStorage.getItem(AUTH_SESS)||'{}');return !!(s.exp&&Date.now()<s.exp);}catch(e){return false;}}
-function setSess(){localStorage.setItem(AUTH_SESS,JSON.stringify({exp:Date.now()+30*864e5}));}
+function sessOk(){try{const s=JSON.parse(localStorage.getItem(AUTH_SESS)||'{}');return !!(s.exp&&Date.now()<s.exp&&s.u);}catch(e){return false;}}
+function setSess(uname){localStorage.setItem(AUTH_SESS,JSON.stringify({u:uname||'',exp:Date.now()+30*864e5}));}
 function lockNow(){localStorage.removeItem(AUTH_SESS);location.reload();}
 async function saveAuth(){
   const user=$('#au_user').value.trim(), email=$('#au_email').value.trim();
@@ -1019,7 +1086,8 @@ function lockScreen(){
       ${canOtp?`<div style="text-align:center;margin-top:14px"><a id="lk_useotp" style="color:#5b3fa0;font-size:13px;cursor:pointer;text-decoration:underline">Forgot password? Email me a code</a></div>`:`<p style="color:#a09aae;font-size:11.5px;margin:14px 0 0;text-align:center">Tip: connect Cloud Sync + set an owner email to enable OTP login.</p>`}
     </div>
     <div id="lk_otp" style="display:none">
-      <p style="color:#6b6180;font-size:13px;margin:0 0 14px">We'll email a 6-digit code to <b>${esc(maskEmail(a.email))}</b>.</p>
+      <p style="color:#6b6180;font-size:13px;margin:0 0 8px">Choose your account — we'll email a 6-digit code.</p>
+      <select id="lk_who" style="width:100%;padding:11px 12px;border:1px solid #ddd6e8;border-radius:9px;font-size:14px;margin-bottom:12px;box-sizing:border-box">${allUsers().filter(u=>u.email).map(u=>`<option value="${esc(u.email)}">${esc(u.name||u.user)} — ${esc(maskEmail(u.email))}</option>`).join('')}</select>
       <button id="lk_send" style="width:100%;padding:12px;background:#5b3fa0;color:#fff;border:0;border-radius:9px;font-size:15px;font-weight:600;cursor:pointer">Send code</button>
       <div id="lk_codewrap" style="display:none;margin-top:14px">
         <label style="font-size:12px;color:#6b6180;display:block;margin-bottom:4px">Enter the 6-digit code</label>
@@ -1033,9 +1101,10 @@ function lockScreen(){
   const msg=(t,bad)=>{const m=w.querySelector('#lk_msg');m.textContent=t;m.style.color=bad?'#c0392b':'#6b6180';};
   const tryPw=async()=>{
     const u=w.querySelector('#lk_user').value.trim(), p=w.querySelector('#lk_pass').value;
-    const h=await sha256((a.salt||'')+':'+p);
-    if(u===(a.user||'')&&h===a.hash){setSess();w.remove();bootApp();}
-    else msg('Wrong Login ID or password. Try again.',true);
+    const found=allUsers().find(x=>x.user.toLowerCase()===u.toLowerCase());
+    if(found){const h=await sha256((found.salt||'')+':'+p);
+      if(h===found.hash){setSess(found.user);w.remove();bootApp();return;}}
+    msg('Wrong Login ID or password. Try again.',true);
   };
   w.querySelector('#lk_go').onclick=tryPw;
   w.querySelector('#lk_pass').onkeydown=e=>{if(e.key==='Enter')tryPw();};
@@ -1046,7 +1115,8 @@ function lockScreen(){
     w.querySelector('#lk_send').onclick=async()=>{
       const b=w.querySelector('#lk_send');b.disabled=true;b.textContent='Sending…';
       try{
-        const r=await fetch(cloudCfg().url.replace(/\/$/,'')+'/otp?ns='+encodeURIComponent(cloudCfg().ns),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+        const who=(w.querySelector('#lk_who')||{}).value||'';
+        const r=await fetch(cloudCfg().url.replace(/\/$/,'')+'/otp?ns='+encodeURIComponent(cloudCfg().ns),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:who})});
         const j=await r.json();
         if(j.ok){w.querySelector('#lk_codewrap').style.display='block';msg('Code sent. Check your email (and spam).');b.textContent='Resend code';}
         else{msg(j.error||'Could not send the code.',true);b.textContent='Send code';}
@@ -1057,9 +1127,10 @@ function lockScreen(){
       const code=w.querySelector('#lk_code').value.trim();
       if(code.length!==6){msg('Enter the 6-digit code.',true);return;}
       try{
-        const r=await fetch(cloudCfg().url.replace(/\/$/,'')+'/otp/verify?ns='+encodeURIComponent(cloudCfg().ns),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+        const who=(w.querySelector('#lk_who')||{}).value||'';
+        const r=await fetch(cloudCfg().url.replace(/\/$/,'')+'/otp/verify?ns='+encodeURIComponent(cloudCfg().ns),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,email:who})});
         const j=await r.json();
-        if(j.ok){setSess();w.remove();bootApp();}
+        if(j.ok){const m=allUsers().find(u=>(u.email||'').toLowerCase()===(j.email||who).toLowerCase());setSess(m?m.user:'');w.remove();bootApp();}
         else msg(j.error||'That code is not valid.',true);
       }catch(e){msg('Network problem verifying the code.',true);}
     };
@@ -1069,6 +1140,7 @@ function lockScreen(){
 
 /* ============================ INIT ============================ */
 function bootApp(){
+applyRoleUI();
 go('dashboard');
 if(cloudCfg().on)cloudStatus('☁ connecting…');else cloudStatus('local only');
 cloudInit();
