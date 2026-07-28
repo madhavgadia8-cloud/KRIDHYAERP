@@ -208,8 +208,37 @@ function saveCloudCfg(c){localStorage.setItem('kridhya_cloud',JSON.stringify(c))
 let _cloudTimer=null,_cloudVer=0;
 function cloudStatus(t){const el=document.getElementById('cloudStatus');if(el)el.textContent=t;const s=document.getElementById('cloudDot');if(s)s.textContent=t;}
 function cloudUrl(){const c=cloudCfg();return c.url.replace(/\/$/,'')+'?ns='+encodeURIComponent(c.ns);}
-async function cloudPull(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return false;try{cloudStatus('Syncing…');const r=await fetch(cloudUrl(),{cache:'no-store'});const j=await r.json();if(j&&j.data){const up=j.updated_at||0;if(force||up>_cloudVer){DB=migrate(JSON.parse(j.data));_cloudVer=up;localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudStatus('☁ synced '+new Date().toLocaleTimeString());return true;}cloudStatus('☁ up to date');}else{cloudStatus('☁ cloud empty');if(!silent)await cloudPush(true);}}catch(e){cloudStatus('⚠ sync error — check URL/code');}return false;}
-async function cloudPush(silent){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return;try{const r=await fetch(cloudUrl(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:DB})});const j=await r.json();if(j&&j.ok){_cloudVer=j.updated_at;cloudStatus('☁ saved '+new Date().toLocaleTimeString());}else cloudStatus('⚠ sync error');}catch(e){cloudStatus('⚠ sync error');}}
+async function cloudPull(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return false;try{cloudStatus('Syncing…');const r=await fetch(cloudUrl(),{cache:'no-store'});const j=await r.json();
+  if(j&&j.data){const up=j.updated_at||0;
+    if(force||up>_cloudVer){
+      const incoming=JSON.parse(j.data), mine=recCount(DB), theirs=recCount(incoming);
+      if(!force&&mine>0&&theirs===0){ // SAFETY: an empty cloud must not erase this device
+        cloudStatus('⚠ cloud is empty — keeping this device’s data');
+        if(!silent)toast('Cloud is empty but this device has '+mine+' records. Use “Push to cloud” to upload them.');
+        return false;}
+      DB=migrate(incoming);_cloudVer=up;localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudStatus('☁ synced '+new Date().toLocaleTimeString());return true;}
+    cloudStatus('☁ up to date');}
+  else{cloudStatus('☁ cloud empty');if(!silent)await cloudPush(true);}}catch(e){cloudStatus('⚠ sync error — check URL/code');}return false;}
+function recCount(d){d=d||{};return ['products','sales','customers','purchases','inquiries','proformas','returns','grns','expenses','suppliers'].reduce((n,k)=>n+((d[k]||[]).length),0);}
+async function cloudPush(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return;
+  try{
+    if(!force){ // SAFETY: never let a near-empty device wipe a cloud full of records
+      const mine=recCount(DB);
+      const rr=await fetch(cloudUrl(),{cache:'no-store'});const rj=await rr.json();
+      if(rj&&rj.data){let rd=null;try{rd=JSON.parse(rj.data);}catch(e){}
+        const theirs=recCount(rd);
+        if(theirs>0&&mine===0){cloudStatus('⚠ push blocked — this device is empty');
+          if(!silent)toast('Blocked: this device has no records but the cloud has '+theirs+'. Use “Pull from cloud” instead.');
+          return;}
+        if(theirs>=5&&mine<theirs*0.4){cloudStatus('⚠ push blocked — would delete records');
+          if(!silent)toast('Blocked: this would delete most cloud records. Use Export Backup, then Push to cloud to force.');
+          return;}
+      }
+    }
+    const r=await fetch(cloudUrl(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:DB})});
+    const j=await r.json();
+    if(j&&j.ok){_cloudVer=j.updated_at;cloudStatus('☁ saved '+new Date().toLocaleTimeString());}else cloudStatus('⚠ sync error');
+  }catch(e){cloudStatus('⚠ sync error');}}
 function cloudPushDebounced(){if(!cloudCfg().on)return;_dirty=true;clearTimeout(_cloudTimer);_cloudTimer=setTimeout(()=>{cloudPush(true);_dirty=false;},1200);}
 /* ---- LIVE AUTO-SYNC: keeps every device up to date by itself ---- */
 let _pollTimer=null,_dirty=false,_pulling=false,_lastAct=Date.now();
@@ -249,7 +278,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)cloudTick(
 function reRender(){const cur=document.querySelector('#nav a.active');const v=cur?cur.dataset.view:'dashboard';if(views[v])views[v]();}
 async function cloudInit(){if(!cloudCfg().on)return;const ch=await cloudPull(true);if(ch)reRender();cloudStartLive();}
 function saveCloudAndConnect(){const url=$('#cl_url').value.trim();const ns=$('#cl_ns').value.trim();const on=$('#cl_on').checked;if(on&&(!url||ns.length<10)){toast('Enter a Worker URL and a Sync Code of 10+ characters');return;}saveCloudCfg({url,ns,on});_cloudVer=0;toast('Cloud settings saved');if(on){cloudPull(false).then(ch=>{if(ch)reRender();});cloudStartLive();}else{clearInterval(_pollTimer);cloudStatus('off');}}
-function cloudForcePush(){if(!cloudCfg().on){toast('Save & Connect first');return;}confirmBox('Push this device to the cloud?','This overwrites the cloud copy with THIS device’s data. Do it on the device that has your correct/master data.',async()=>{await cloudPush(true);toast('Pushed to cloud');});}
+function cloudForcePush(){if(!cloudCfg().on){toast('Save & Connect first');return;}confirmBox('Push this device to the cloud?','This overwrites the cloud copy with THIS device’s data ('+recCount(DB)+' records). Do it on the device that has your correct/master data. Export a backup first if unsure.',async()=>{await cloudPush(true,true);toast('Pushed to cloud');});}
 function cloudForcePull(){if(!cloudCfg().on){toast('Save & Connect first');return;}confirmBox('Pull cloud data to this device?','This replaces THIS device’s data with the cloud copy.',async()=>{const ch=await cloudPull(false,true);if(ch)reRender();toast('Pulled from cloud');});}
 const uid=p=>p+Math.random().toString(36).slice(2,8);
 
