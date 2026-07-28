@@ -210,10 +210,45 @@ function cloudStatus(t){const el=document.getElementById('cloudStatus');if(el)el
 function cloudUrl(){const c=cloudCfg();return c.url.replace(/\/$/,'')+'?ns='+encodeURIComponent(c.ns);}
 async function cloudPull(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return false;try{cloudStatus('Syncing…');const r=await fetch(cloudUrl(),{cache:'no-store'});const j=await r.json();if(j&&j.data){const up=j.updated_at||0;if(force||up>_cloudVer){DB=migrate(JSON.parse(j.data));_cloudVer=up;localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudStatus('☁ synced '+new Date().toLocaleTimeString());return true;}cloudStatus('☁ up to date');}else{cloudStatus('☁ cloud empty');if(!silent)await cloudPush(true);}}catch(e){cloudStatus('⚠ sync error — check URL/code');}return false;}
 async function cloudPush(silent){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return;try{const r=await fetch(cloudUrl(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:DB})});const j=await r.json();if(j&&j.ok){_cloudVer=j.updated_at;cloudStatus('☁ saved '+new Date().toLocaleTimeString());}else cloudStatus('⚠ sync error');}catch(e){cloudStatus('⚠ sync error');}}
-function cloudPushDebounced(){if(!cloudCfg().on)return;clearTimeout(_cloudTimer);_cloudTimer=setTimeout(()=>cloudPush(true),1500);}
+function cloudPushDebounced(){if(!cloudCfg().on)return;_dirty=true;clearTimeout(_cloudTimer);_cloudTimer=setTimeout(()=>{cloudPush(true);_dirty=false;},1200);}
+/* ---- LIVE AUTO-SYNC: keeps every device up to date by itself ---- */
+let _pollTimer=null,_dirty=false,_pulling=false,_lastAct=Date.now();
+const POLL_FAST=1000, POLL_IDLE=10000, ACTIVE_FOR=3*60000;
+['pointerdown','keydown','touchstart','wheel'].forEach(ev=>document.addEventListener(ev,()=>{_lastAct=Date.now();},{passive:true}));
+function pollGap(){return (Date.now()-_lastAct<ACTIVE_FOR)?POLL_FAST:POLL_IDLE;}
+function metaUrl(){const c=cloudCfg();return c.url.replace(/\/$/,'')+'?meta=1&ns='+encodeURIComponent(c.ns);}
+async function cloudChanged(){ // tiny request: just asks "has anything changed?"
+  try{const r=await fetch(metaUrl(),{cache:'no-store'});const j=await r.json();
+    if(typeof j.updated_at!=='number')return true;      // old worker → fall back to full pull
+    return j.updated_at>_cloudVer;
+  }catch(e){return false;}
+}
+function busyEditing(){
+  const ov=document.getElementById('overlay');
+  if(ov&&ov.classList.contains('show'))return true;              // a form/modal is open
+  const a=document.activeElement;
+  if(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return true;  // user is typing
+  return false;
+}
+async function cloudTick(){
+  if(!cloudCfg().on||_pulling||_dirty)return;
+  if(document.hidden)return;         // tab in background — skip
+  if(busyEditing())return;           // never interrupt data entry
+  _pulling=true;
+  try{
+    if(await cloudChanged()){const ch=await cloudPull(true);if(ch)reRender();}
+  }finally{_pulling=false;}
+}
+function cloudStartLive(){
+  clearTimeout(_pollTimer);
+  if(!cloudCfg().on){cloudStatus('local only');return;}
+  const loop=async()=>{await cloudTick();clearTimeout(_pollTimer);_pollTimer=setTimeout(loop,pollGap());};
+  _pollTimer=setTimeout(loop,POLL_FAST);
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)cloudTick();});
 function reRender(){const cur=document.querySelector('#nav a.active');const v=cur?cur.dataset.view:'dashboard';if(views[v])views[v]();}
-async function cloudInit(){if(!cloudCfg().on)return;const ch=await cloudPull(true);if(ch)reRender();}
-function saveCloudAndConnect(){const url=$('#cl_url').value.trim();const ns=$('#cl_ns').value.trim();const on=$('#cl_on').checked;if(on&&(!url||ns.length<10)){toast('Enter a Worker URL and a Sync Code of 10+ characters');return;}saveCloudCfg({url,ns,on});_cloudVer=0;toast('Cloud settings saved');if(on){cloudPull(false).then(ch=>{if(ch)reRender();});}else cloudStatus('off');}
+async function cloudInit(){if(!cloudCfg().on)return;const ch=await cloudPull(true);if(ch)reRender();cloudStartLive();}
+function saveCloudAndConnect(){const url=$('#cl_url').value.trim();const ns=$('#cl_ns').value.trim();const on=$('#cl_on').checked;if(on&&(!url||ns.length<10)){toast('Enter a Worker URL and a Sync Code of 10+ characters');return;}saveCloudCfg({url,ns,on});_cloudVer=0;toast('Cloud settings saved');if(on){cloudPull(false).then(ch=>{if(ch)reRender();});cloudStartLive();}else{clearInterval(_pollTimer);cloudStatus('off');}}
 function cloudForcePush(){if(!cloudCfg().on){toast('Save & Connect first');return;}confirmBox('Push this device to the cloud?','This overwrites the cloud copy with THIS device’s data. Do it on the device that has your correct/master data.',async()=>{await cloudPush(true);toast('Pushed to cloud');});}
 function cloudForcePull(){if(!cloudCfg().on){toast('Save & Connect first');return;}confirmBox('Pull cloud data to this device?','This replaces THIS device’s data with the cloud copy.',async()=>{const ch=await cloudPull(false,true);if(ch)reRender();toast('Pulled from cloud');});}
 const uid=p=>p+Math.random().toString(36).slice(2,8);
