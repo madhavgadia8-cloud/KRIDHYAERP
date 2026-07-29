@@ -121,6 +121,7 @@
       <div class="grp">OPERATIONS</div>
       <a data-view="inventory"><span class="ic">💍</span><span class="t">Inventory</span></a>
       <a data-view="sales"><span class="ic">🧾</span><span class="t">Tax Invoices</span></a>
+      <a data-view="quotes"><span class="ic">🏷️</span><span class="t">Quotations</span></a>
       <a data-view="proforma"><span class="ic">📝</span><span class="t">Proforma (PI)</span></a>
       <a data-view="returns"><span class="ic">↩️</span><span class="t">Returns</span></a>
       <a data-view="inquiries"><span class="ic">📨</span><span class="t">Inquiries</span></a>
@@ -166,7 +167,7 @@ function seed(){
   const openInv=products.reduce((s,p)=>s+p.stock*p.cost,0);
   return {
     company:{name:'Kridhya',tagline:'Artificial Jewellery',phone:'',email:'',address:'',gstin:'',state:'Maharashtra',gstRate:3,currency:'₹',
-      invPrefix:'KRD',poPrefix:'PO',piPrefix:'PI',crPrefix:'CN',grnPrefix:'GR',invSeq:3,poSeq:2,piSeq:1,crSeq:1,grnSeq:1,logo:'',lastBackup:'',bankName:'',accountNo:'',ifsc:'',upi:'',
+      invPrefix:'KRD',poPrefix:'PO',piPrefix:'PI',crPrefix:'CN',grnPrefix:'GR',qtPrefix:'QT',invSeq:3,poSeq:2,piSeq:1,crSeq:1,grnSeq:1,qtSeq:1,logo:'',lastBackup:'',bankName:'',accountNo:'',ifsc:'',upi:'',
       openingCash:50000,openingInventory:openInv,openingDate:dateBack(30)},
     products,
     customers:[
@@ -219,7 +220,7 @@ async function cloudPull(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.n
       DB=migrate(incoming);_cloudVer=up;localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudStatus('☁ synced '+new Date().toLocaleTimeString());return true;}
     cloudStatus('☁ up to date');}
   else{cloudStatus('☁ cloud empty');if(!silent)await cloudPush(true);}}catch(e){cloudStatus('⚠ sync error — check URL/code');}return false;}
-function recCount(d){d=d||{};return ['products','sales','customers','purchases','inquiries','proformas','returns','grns','expenses','suppliers'].reduce((n,k)=>n+((d[k]||[]).length),0);}
+function recCount(d){d=d||{};return ['products','sales','customers','purchases','inquiries','quotes','proformas','returns','grns','expenses','suppliers','journals'].reduce((n,k)=>n+((d[k]||[]).length),0);}
 async function cloudPush(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return;
   try{
     if(!force){ // SAFETY: never let a near-empty device wipe a cloud full of records
@@ -547,7 +548,10 @@ function saveInvoice(){draft.discount=0;draft.gstRate=+$('#i_gst').value||0;
   const inv={id:uid('i'),no,date,customerId:draft.customerId,items,discount:draft.discount,gstRate:draft.gstRate,mode:draft.mode,status:draft.status};
   const t=invTotals(inv);inv.paidAmount=draft.status==='Paid'?t.total:(draft.status==='Partial'?Math.round(t.total/2):0);
   items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-it.qty);});
-  if(_fromPI){const pi=DB.proformas.find(x=>x.id===_fromPI);if(pi){pi.status='Converted';pi.convertedInvId=inv.id;pi.customerId=inv.customerId;}_fromPI=null;}
+  if(_fromPI){const pi=DB.proformas.find(x=>x.id===_fromPI);if(pi){pi.status='Converted';pi.convertedInvId=inv.id;pi.customerId=inv.customerId;
+    if(pi.quoteId){const q=qList().find(x=>x.id===pi.quoteId);if(q){q.status='Converted';q.customerId=inv.customerId;}}}_fromPI=null;}
+  if(_fromQuote){const q=qList().find(x=>x.id===_fromQuote);if(q){q.status='Converted';q.convertedInvId=inv.id;q.customerId=inv.customerId;
+    if(q.inquiryId){const inq=DB.inquiries.find(x=>x.id===q.inquiryId);if(inq)inq.status='Converted';}}_fromQuote=null;}
   DB.sales.push(inv);DB.company.invSeq++;save();closeModal();viewInvoice(inv.id);toast('Invoice '+no+' created');}
 function payInvoice(id){const i=DB.sales.find(x=>x.id===id);const t=invTotals(i);const bal=t.total-(i.paidAmount||0);
   openModal(`<div class="modal-h"><h3>Record Payment — ${esc(i.no)}</h3><button class="x" onclick="closeModal()">×</button></div>
@@ -582,6 +586,102 @@ function waInvoice(id){const i=DB.sales.find(x=>x.id===id);const t=invTotals(i);
 
 /* ============================ PROFORMA INVOICES (PI) ============================ */
 function piParty(pi){return pi.customerId?cust(pi.customerId).name:(pi.leadName||'(walk-in)');}
+/* =============== QUOTATIONS (Inquiry → Quote → PI → Tax Invoice) =============== */
+function qList(){DB.quotes=DB.quotes||[];return DB.quotes;}
+function qParty(q){return q.customerId?cust(q.customerId).name:(q.leadName||'(lead)');}
+const QST={Open:'blue',Sent:'blue',Accepted:'green',Rejected:'red',Converted:'green'};
+views.quotes=function(){
+  const list=qList().slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const tot=list.reduce((s,q)=>s+invTotals(q).total,0);
+  const open=list.filter(q=>q.status==='Open'||q.status==='Sent').length;
+  const acc=list.filter(q=>q.status==='Accepted').length;
+  const conv=list.filter(q=>q.status==='Converted').length;
+  $('#main').innerHTML=header('Quotations','Price offer sent to a lead — accept it to raise a Proforma or Tax Invoice',`<button class="btn gold" onclick="newQuote()">+ New Quotation</button>`)
+  +`<div class="grid kpis" style="margin-bottom:18px">
+      <div class="card kpi b2"><div class="lbl">Total Quoted</div><div class="val">${cur0(tot)}</div><div class="meta">${list.length} quotation(s)</div></div>
+      <div class="card kpi b5"><div class="lbl">Awaiting Reply</div><div class="val">${open}</div></div>
+      <div class="card kpi b3"><div class="lbl">Accepted</div><div class="val">${acc}</div></div>
+      <div class="card kpi b4"><div class="lbl">Converted</div><div class="val">${conv}</div></div>
+    </div>
+    <div class="card"><table><thead><tr><th>Quote No.</th><th>Date</th><th>Valid Until</th><th>Customer / Lead</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+      <tbody>${list.length?list.map(q=>{const expired=q.validUntil&&q.validUntil<dateBack(0)&&q.status!=='Converted';
+      return `<tr><td><b>${esc(q.no)}</b></td><td>${fmtDate(q.date)}</td><td>${q.validUntil?fmtDate(q.validUntil)+(expired?' <span class="pill red" style="font-size:9px">expired</span>':''):'—'}</td>
+        <td>${esc(qParty(q))}${q.customerId?'':' <span class="pill blue" style="font-size:9px">lead</span>'}</td>
+        <td class="num"><b>${cur(invTotals(q).total)}</b></td>
+        <td><span class="pill ${QST[q.status]||'blue'}">${esc(q.status)}</span></td>
+        <td><div class="row-actions">
+          <button class="ico-btn" title="View / Print / Share" onclick="viewQuote('${q.id}')">🖨️</button>
+          ${q.status!=='Converted'&&q.status!=='Accepted'?`<button class="ico-btn" title="Mark Accepted" onclick="setQuoteStatus('${q.id}','Accepted')">✅</button>`:''}
+          ${q.status!=='Converted'?`<button class="ico-btn" title="Convert to Proforma (PI)" onclick="convertQuote('${q.id}')">📝</button>`:''}
+          ${q.status!=='Converted'?`<button class="ico-btn" title="Convert straight to Tax Invoice" onclick="quoteToInvoice('${q.id}')">➡️</button>`:''}
+          <button class="ico-btn" title="Delete" onclick="delQuote('${q.id}')">🗑️</button></div></td></tr>`;}).join('')
+      :`<tr><td colspan="7"><div class="empty"><div class="big">🏷️</div>No quotations yet. Create one, or convert an inquiry.</div></td></tr>`}</tbody></table></div>`;
+};
+let _qFromInquiry=null,_fromQuote=null;
+function newQuote(){if(!DB.products.length){toast('Add a product first');go('inventory');return;}
+  _qFromInquiry=null;draft={items:[{productId:DB.products[0].id,qty:1,price:DB.products[0].price,disc:0}],discount:0,gstRate:DB.company.gstRate,customerId:DB.customers[0]?.id||''};
+  const v=new Date();v.setDate(v.getDate()+7);quoteModal(v.toISOString().slice(0,10));}
+function quoteModal(validDefault,fixedName){
+  const custField=fixedName?`<div class="fld"><label>Customer (from inquiry)</label><input value="${esc(fixedName)}" readonly style="background:#faf8fc"><div class="hint">Saved as a customer only when a Tax Invoice is issued.</div></div>`
+    :`<div class="fld"><label>Customer</label><select id="i_cust" onchange="renderSum()">${DB.customers.map(c=>`<option value="${c.id}" ${c.id===draft.customerId?'selected':''}>${esc(c.name)} — ${esc(c.state||'')}</option>`).join('')||'<option>— add a customer —</option>'}</select></div>`;
+  openModal(`<div class="modal-h"><h3>New Quotation</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="modal-b">
+      <div class="fld-row3">${custField}<div class="fld"><label>Date</label><input id="i_date" type="date" value="${dateBack(0)}"></div><div class="fld"><label>Valid Until</label><input id="p_valid" type="date" value="${validDefault||''}"></div></div>
+      <label style="font-size:12px;font-weight:600;color:var(--muted)">Items <span class="hint">— adjust Rate to hit your target margin %</span></label>
+      <table class="li-table"><thead><tr><th style="width:34%">Product</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc ₹</th><th class="num">Amount</th><th class="num">Margin</th><th></th></tr></thead><tbody id="i_lines"></tbody></table>
+      <button class="btn ghost sm" style="margin-top:8px" onclick="addLine()">+ Add item</button>
+      <div class="li-sum" id="i_sum"></div>
+      <div class="fld-row" style="margin-top:14px"><div class="fld" style="max-width:200px"><label>GST %</label><input id="i_gst" type="number" value="${draft.gstRate}" oninput="syncDraft()"></div>
+      <div class="fld"><label>Notes / Terms <span class="hint">(shown on the quotation)</span></label><input id="q_note" placeholder="e.g. 50% advance, delivery in 7 days"></div></div>
+    </div>
+    <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveQuote()">Save Quotation</button></div>`,true);
+  renderLines();}
+function saveQuote(){draft.discount=0;draft.gstRate=+$('#i_gst').value||0;
+  if(!draft.items.some(it=>it.qty>0)){toast('Add at least one item');return;}
+  const no=DB.company.qtPrefix+'-'+String(DB.company.qtSeq||1).padStart(4,'0');
+  const q={id:uid('qt'),no,date:$('#i_date').value,validUntil:$('#p_valid').value,items:draft.items.filter(it=>it.qty>0).map(it=>({...it})),
+    discount:draft.discount,gstRate:draft.gstRate,note:($('#q_note')||{}).value||'',status:'Open'};
+  if(draft.lead){q.leadName=draft.lead.name;q.leadPhone=draft.lead.phone;q.customerId='';}
+  else q.customerId=$('#i_cust')?$('#i_cust').value:(draft.customerId||'');
+  if(_qFromInquiry){const inq=DB.inquiries.find(x=>x.id===_qFromInquiry);if(inq){inq.status='Quoted';inq.quoteId=q.id;q.inquiryId=inq.id;}_qFromInquiry=null;}
+  qList().push(q);DB.company.qtSeq=(DB.company.qtSeq||1)+1;save();closeModal();viewQuote(q.id);toast('Quotation '+no+' created');}
+function setQuoteStatus(id,st){const q=qList().find(x=>x.id===id);if(!q)return;q.status=st;save();views.quotes();toast('Marked '+st);}
+function viewQuote(id){const i=qList().find(x=>x.id===id);const c=i.customerId?cust(i.customerId):{name:i.leadName||'(lead)',phone:i.leadPhone||'',address:'',state:'',gstin:''};
+  const t=invTotals(i);const sp=gstSplit(i);const co=DB.company;
+  const rows=i.items.map((it,n)=>{const p=prod(it.productId);const d=+it.disc||0;const amt=it.qty*it.price-d;return `<tr><td>${n+1}</td><td>${esc(p.name)}<br><span class="hint">${esc(p.material)}</span></td><td>${esc(p.hsn)}</td><td class="num">${it.qty}</td><td class="num">${cur(it.price)}</td><td class="num">${d?cur(d):'—'}</td><td class="num">${cur(amt)}</td></tr>`;}).join('');
+  const gstBlock=sp.inter?`<div class="r"><span>IGST @ ${i.gstRate}%</span><span>${cur(sp.igst)}</span></div>`:`<div class="r"><span>CGST @ ${i.gstRate/2}%</span><span>${cur(sp.cgst)}</span></div><div class="r"><span>SGST @ ${i.gstRate/2}%</span><span>${cur(sp.sgst)}</span></div>`;
+  openModal(`<div class="modal-h"><h3>Quotation ${esc(i.no)}</h3><button class="x" onclick="closeModal()">×</button></div>
+   <div class="modal-b" id="printArea">
+     <div style="text-align:center;margin-bottom:6px"><div style="font-size:11px;letter-spacing:2px;color:#7a7390">QUOTATION</div></div>
+     <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--plum);padding-bottom:12px;margin-bottom:12px">
+       <div>${logoHtml()}<div style="font-size:23px;font-weight:800;color:var(--plum)">${esc(co.name)}</div><div class="hint">${esc(co.tagline)}</div>${co.address?`<div class="hint">${esc(co.address)}</div>`:''}${co.phone?`<div class="hint">📞 ${esc(co.phone)}</div>`:''}${co.gstin?`<div class="hint"><b>GSTIN:</b> ${esc(co.gstin)}</div>`:''}</div>
+       <div style="text-align:right"><div class="hint">Quote No.</div><div style="font-weight:700">${esc(i.no)}</div><div class="hint" style="margin-top:5px">Date</div><div>${fmtDate(i.date)}</div>${i.validUntil?`<div class="hint" style="margin-top:5px">Valid Until</div><div>${fmtDate(i.validUntil)}</div>`:''}</div>
+     </div>
+     <div style="margin-bottom:12px;font-size:13px"><span class="hint">Quotation For</span><br><b>${esc(c.name)}</b>${c.phone?' · '+esc(c.phone):''}<br>${esc(c.address||'')}${c.state?'<br>State: '+esc(c.state):''}${c.gstin?'<br>GSTIN: '+esc(c.gstin):''}</div>
+     <table><thead><tr><th>#</th><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc</th><th class="num">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+     <div class="li-sum"><div class="r"><span>Subtotal</span><span>${cur(t.sub)}</span></div>${t.disc?`<div class="r"><span>Discount</span><span>− ${cur(t.disc)}</span></div>`:''}<div class="r"><span>Taxable Value</span><span>${cur(t.taxable)}</span></div>${gstBlock}<div class="r total"><span>Quoted Total</span><span>${cur(t.total)}</span></div></div>
+     <div style="margin-top:12px;font-size:12px"><b>Amount in words:</b> ${rupeesWords(t.total)}</div>
+     ${i.note?`<div style="margin-top:10px;font-size:12px"><b>Terms:</b> ${esc(i.note)}</div>`:''}
+     <p class="hint" style="margin-top:12px">This is a Quotation, not a Tax Invoice. Prices &amp; availability are valid until the date shown above.</p>
+     <div style="margin-top:8px;text-align:right;font-size:12px">For <b>${esc(co.name)}</b><br><br><br><span class="hint">Authorised Signatory</span></div>
+   </div>
+   <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Close</button><button class="btn" onclick="waQuote('${id}')">📲 WhatsApp</button>
+   ${i.status!=='Converted'?`<button class="btn" onclick="closeModal();convertQuote('${id}')">📝 To Proforma</button><button class="btn" onclick="closeModal();quoteToInvoice('${id}')">➡️ To Tax Invoice</button>`:''}
+   <button class="btn gold" onclick="printDoc('Quotation')">🖨️ Print / Save PDF</button></div>`,true);}
+function waQuote(id){const i=qList().find(x=>x.id===id);const t=invTotals(i);const c=i.customerId?cust(i.customerId):{name:i.leadName||'',phone:i.leadPhone||''};const co=DB.company;
+  const items=i.items.map(it=>prod(it.productId).name+' x'+it.qty).join(', ');
+  waShare(c.phone,`*${co.name}* — Quotation ${i.no}\nDate: ${fmtDate(i.date)}${i.validUntil?`\nValid until: ${fmtDate(i.validUntil)}`:''}\nItems: ${items}\nQuoted Total: ${cur(t.total)}${i.note?`\nTerms: ${i.note}`:''}\n\nReply to confirm and we'll reserve your pieces!`);}
+function convertQuote(id){const q=qList().find(x=>x.id===id);if(!DB.products.length){toast('Add a product first');return;}
+  draft={items:q.items.map(it=>({...it})),discount:q.discount,gstRate:q.gstRate,customerId:q.customerId||''};
+  if(!q.customerId)draft.lead={name:q.leadName||'Walk-in',phone:q.leadPhone||''};
+  _fromQuote=id;_piFromInquiry=null;
+  const v=new Date();v.setDate(v.getDate()+7);
+  proformaModal(v.toISOString().slice(0,10),q.customerId?'':(q.leadName||'Walk-in'));}
+function quoteToInvoice(id){const q=qList().find(x=>x.id===id);if(!DB.products.length){toast('Add a product first');return;}
+  draft={items:q.items.map(it=>({...it})),discount:q.discount,gstRate:q.gstRate,customerId:q.customerId||'',status:'Paid',mode:'Cash'};
+  if(!q.customerId)draft.lead={name:q.leadName||'Walk-in',phone:q.leadPhone||''};
+  _fromQuote=id;_fromPI=null;invoiceModal();}
+function delQuote(id){const q=qList().find(x=>x.id===id);confirmBox(`Delete quotation ${q.no}?`,'',()=>{DB.quotes=qList().filter(x=>x.id!==id);save();views.quotes();toast('Quotation deleted');});}
 views.proforma=function(){
   const list=[...(DB.proformas||[])].sort((a,b)=>b.date.localeCompare(a.date));
   const totQuoted=list.reduce((s,p)=>s+invTotals(p).total,0);
@@ -621,6 +721,7 @@ function saveProforma(){draft.discount=0;draft.gstRate=+$('#i_gst').value||0;con
   if(draft.lead){pi.leadName=draft.lead.name;pi.leadPhone=draft.lead.phone;pi.customerId='';}
   else pi.customerId=$('#i_cust')?$('#i_cust').value:(draft.customerId||'');
   if(_piFromInquiry){const q=DB.inquiries.find(x=>x.id===_piFromInquiry);if(q){q.status='Converted';q.piId=pi.id;pi.inquiryId=q.id;}_piFromInquiry=null;}
+  if(_fromQuote){const q=qList().find(x=>x.id===_fromQuote);if(q){q.status='Converted';q.piId=pi.id;pi.quoteId=q.id;pi.inquiryId=q.inquiryId||'';}_fromQuote=null;}
   DB.proformas.push(pi);DB.company.piSeq++;save();closeModal();viewProforma(pi.id);toast('Proforma '+no+' created');}
 function viewProforma(id){const i=DB.proformas.find(x=>x.id===id);const c=i.customerId?cust(i.customerId):{name:i.leadName||'(walk-in)',phone:i.leadPhone||'',address:'',state:'',gstin:''};const t=invTotals(i);const sp=gstSplit(i);const co=DB.company;
   const rows=i.items.map((it,n)=>{const p=prod(it.productId);const d=+it.disc||0;const amt=it.qty*it.price-d;return `<tr><td>${n+1}</td><td>${esc(p.name)}<br><span class="hint">${esc(p.material)}</span></td><td>${esc(p.hsn)}</td><td class="num">${it.qty}</td><td class="num">${cur(it.price)}</td><td class="num">${d?cur(d):'—'}</td><td class="num">${cur(amt)}</td></tr>`;}).join('');
@@ -1125,7 +1226,7 @@ function delInquiry(id){confirmBox('Delete this inquiry?','',()=>{DB.inquiries=D
 function convertInquiry(id){const q=DB.inquiries.find(x=>x.id===id);if(!DB.products.length){toast('Add a product first');go('inventory');return;}
   const pid=(q.productId&&DB.products.some(p=>p.id===q.productId))?q.productId:DB.products[0].id;
   draft={items:[{productId:pid,qty:1,price:prod(pid).price,disc:0}],discount:0,gstRate:DB.company.gstRate,customerId:'',lead:{name:q.name,phone:q.phone||''}};
-  _piFromInquiry=id;const v=new Date();v.setDate(v.getDate()+7);proformaModal(v.toISOString().slice(0,10),draft.lead.name);}
+  _qFromInquiry=id;_piFromInquiry=null;const v=new Date();v.setDate(v.getDate()+7);quoteModal(v.toISOString().slice(0,10),draft.lead.name);}
 
 /* ============================ SETTINGS ============================ */
 views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
