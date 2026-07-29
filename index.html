@@ -587,7 +587,7 @@ function waInvoice(id){const i=DB.sales.find(x=>x.id===id);const t=invTotals(i);
 /* ============================ PROFORMA INVOICES (PI) ============================ */
 function piParty(pi){return pi.customerId?cust(pi.customerId).name:(pi.leadName||'(walk-in)');}
 /* =============== QUOTATIONS (Inquiry → Quote → PI → Tax Invoice) =============== */
-function qList(){DB.quotes=DB.quotes||[];return DB.quotes;}
+function qList(){DB.quotes=DB.quotes||[];if(!DB.company.qtPrefix)DB.company.qtPrefix='QT';if(!DB.company.qtSeq)DB.company.qtSeq=1;return DB.quotes;}
 function qParty(q){return q.customerId?cust(q.customerId).name:(q.leadName||'(lead)');}
 const QST={Open:'blue',Sent:'blue',Accepted:'green',Rejected:'red',Converted:'green'};
 views.quotes=function(){
@@ -638,7 +638,7 @@ function quoteModal(validDefault,fixedName){
   renderLines();}
 function saveQuote(){draft.discount=0;draft.gstRate=+$('#i_gst').value||0;
   if(!draft.items.some(it=>it.qty>0)){toast('Add at least one item');return;}
-  const no=DB.company.qtPrefix+'-'+String(DB.company.qtSeq||1).padStart(4,'0');
+  qList();const no=(DB.company.qtPrefix||'QT')+'-'+String(DB.company.qtSeq||1).padStart(4,'0');
   const q={id:uid('qt'),no,date:$('#i_date').value,validUntil:$('#p_valid').value,items:draft.items.filter(it=>it.qty>0).map(it=>({...it})),
     discount:draft.discount,gstRate:draft.gstRate,note:($('#q_note')||{}).value||'',status:'Open'};
   if(draft.lead){q.leadName=draft.lead.name;q.leadPhone=draft.lead.phone;q.customerId='';}
