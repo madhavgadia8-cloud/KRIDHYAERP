@@ -118,15 +118,19 @@
     <div class="brand"><h1><span class="logo">K</span><span>Kridhya</span></h1><span class="tag">ARTIFICIAL JEWELLERY · ERP</span></div>
     <nav id="nav">
       <a data-view="dashboard" class="active"><span class="ic">📊</span><span class="t">Dashboard</span></a>
-      <div class="grp">OPERATIONS</div>
-      <a data-view="inventory"><span class="ic">💍</span><span class="t">Inventory</span></a>
-      <a data-view="sales"><span class="ic">🧾</span><span class="t">Tax Invoices</span></a>
-      <a data-view="quotes"><span class="ic">🏷️</span><span class="t">Quotations</span></a>
-      <a data-view="proforma"><span class="ic">📝</span><span class="t">Proforma (PI)</span></a>
-      <a data-view="returns"><span class="ic">↩️</span><span class="t">Returns</span></a>
-      <a data-view="inquiries"><span class="ic">📨</span><span class="t">Inquiries</span></a>
+      <div class="grp">PURCHASE</div>
+      <a data-view="rfq"><span class="ic">📤</span><span class="t">RFQ</span></a>
       <a data-view="purchases"><span class="ic">📦</span><span class="t">Purchase Orders</span></a>
       <a data-view="grn"><span class="ic">📥</span><span class="t">Goods Receipt</span></a>
+      <div class="grp">STOCK</div>
+      <a data-view="inventory"><span class="ic">💍</span><span class="t">Inventory</span></a>
+      <div class="grp">SALES</div>
+      <a data-view="inquiries"><span class="ic">📨</span><span class="t">Inquiries</span></a>
+      <a data-view="quotes"><span class="ic">🏷️</span><span class="t">Quotations</span></a>
+      <a data-view="proforma"><span class="ic">📝</span><span class="t">Proforma (PI)</span></a>
+      <a data-view="sales"><span class="ic">🧾</span><span class="t">Tax Invoices</span></a>
+      <a data-view="returns"><span class="ic">↩️</span><span class="t">Returns</span></a>
+      <div class="grp">OTHER</div>
       <a data-view="expenses"><span class="ic">💸</span><span class="t">Expenses</span></a>
       <div class="grp">ACCOUNTING</div>
       <a data-view="accounting"><span class="ic">📒</span><span class="t">Books</span></a>
@@ -220,7 +224,7 @@ async function cloudPull(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.n
       DB=migrate(incoming);_cloudVer=up;localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudStatus('☁ synced '+new Date().toLocaleTimeString());return true;}
     cloudStatus('☁ up to date');}
   else{cloudStatus('☁ cloud empty');if(!silent)await cloudPush(true);}}catch(e){cloudStatus('⚠ sync error — check URL/code');}return false;}
-function recCount(d){d=d||{};return ['products','sales','customers','purchases','inquiries','quotes','proformas','returns','grns','expenses','suppliers','journals'].reduce((n,k)=>n+((d[k]||[]).length),0);}
+function recCount(d){d=d||{};return ['products','sales','customers','purchases','rfqs','inquiries','quotes','proformas','returns','grns','expenses','suppliers','journals'].reduce((n,k)=>n+((d[k]||[]).length),0);}
 async function cloudPush(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.ns)return;
   try{
     if(!force){ // SAFETY: never let a near-empty device wipe a cloud full of records
@@ -800,6 +804,117 @@ function viewReturn(id){const i=DB.returns.find(x=>x.id===id);const c=cust(i.cus
 function delReturn(id){const r=DB.returns.find(x=>x.id===id);confirmBox(`Delete ${r.no}?`,'Stock added back by this return will be removed again.',()=>{r.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-it.qty);});DB.returns=DB.returns.filter(x=>x.id!==id);save();views.returns();toast('Credit note deleted');});}
 
 /* ============================ PURCHASE ORDERS ============================ */
+/* ================= RFQ — Request for Quotation (to suppliers) ================= */
+function rList(){DB.rfqs=DB.rfqs||[];if(!DB.company.rfqPrefix)DB.company.rfqPrefix='RFQ';if(!DB.company.rfqSeq)DB.company.rfqSeq=1;return DB.rfqs;}
+function rfqNet(r){return (r.items||[]).reduce((s,it)=>s+(+it.qty||0)*(+it.cost||0),0);}
+const RST={Draft:'blue',Sent:'blue',Quoted:'green',Converted:'green',Closed:'red'};
+views.rfq=function(){
+  const list=rList().slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const open=list.filter(r=>r.status==='Draft'||r.status==='Sent').length;
+  const quoted=list.filter(r=>r.status==='Quoted').length;
+  const conv=list.filter(r=>r.status==='Converted').length;
+  $('#main').innerHTML=header('RFQ — Request for Quotation','Ask suppliers for their price before you raise a Purchase Order',`<button class="btn gold" onclick="newRFQ()">+ New RFQ</button>`)
+  +`<div class="grid kpis" style="margin-bottom:18px">
+      <div class="card kpi b2"><div class="lbl">Estimated Value</div><div class="val">${cur0(list.reduce((s,r)=>s+rfqNet(r),0))}</div><div class="meta">${list.length} RFQ(s)</div></div>
+      <div class="card kpi b5"><div class="lbl">Awaiting Price</div><div class="val">${open}</div></div>
+      <div class="card kpi b3"><div class="lbl">Price Received</div><div class="val">${quoted}</div></div>
+      <div class="card kpi b4"><div class="lbl">Ordered</div><div class="val">${conv}</div></div>
+    </div>
+    <div class="card"><table><thead><tr><th>RFQ No.</th><th>Date</th><th>Needed By</th><th>Supplier</th><th class="num">Est. Value</th><th>Status</th><th></th></tr></thead>
+      <tbody>${list.length?list.map(r=>`<tr><td><b>${esc(r.no)}</b></td><td>${fmtDate(r.date)}</td><td>${r.needBy?fmtDate(r.needBy):'—'}</td><td>${esc(supp(r.supplierId).name||'—')}</td>
+        <td class="num"><b>${cur(rfqNet(r))}</b></td><td><span class="pill ${RST[r.status]||'blue'}">${esc(r.status)}</span></td>
+        <td><div class="row-actions">
+          <button class="ico-btn" title="View / Print / Share" onclick="viewRFQ('${r.id}')">🖨️</button>
+          ${r.status!=='Converted'?`<button class="ico-btn" title="Enter supplier's quoted price" onclick="rfqPrices('${r.id}')">💰</button>`:''}
+          ${r.status!=='Converted'?`<button class="ico-btn" title="Convert to Purchase Order" onclick="rfqToPO('${r.id}')">➡️</button>`:''}
+          <button class="ico-btn" title="Edit" onclick="newRFQ('${r.id}')">✏️</button>
+          <button class="ico-btn" title="Delete" onclick="delRFQ('${r.id}')">🗑️</button></div></td></tr>`).join('')
+      :`<tr><td colspan="7"><div class="empty"><div class="big">📤</div>No RFQs yet. Ask a supplier for pricing before ordering.</div></td></tr>`}</tbody></table></div>`;
+};
+let rdraft=null;
+function newRFQ(id){if(!DB.suppliers.length){toast('Add a supplier first');go('suppliers');return;}
+  if(!DB.products.length){toast('Add a product first');go('inventory');return;}
+  const ex=id?rList().find(x=>x.id===id):null;
+  rdraft=ex?{id:ex.id,supplierId:ex.supplierId,needBy:ex.needBy,note:ex.note,gstRate:ex.gstRate,items:ex.items.map(it=>({...it}))}
+    :{supplierId:DB.suppliers[0].id,needBy:'',note:'',gstRate:DB.company.gstRate,items:[{productId:DB.products[0].id,qty:1,cost:DB.products[0].cost||0}]};
+  rfqModal();}
+function rfqModal(){
+  const supOpts=DB.suppliers.map(s=>`<option value="${s.id}" ${s.id===rdraft.supplierId?'selected':''}>${esc(s.name)} — ${esc(s.state||'')}</option>`).join('');
+  const v=new Date();v.setDate(v.getDate()+10);
+  openModal(`<div class="modal-h"><h3>${rdraft.id?'Edit':'New'} RFQ</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="modal-b">
+      <div class="fld-row3"><div class="fld"><label>Supplier</label><select id="r_sup">${supOpts}</select></div>
+      <div class="fld"><label>Date</label><input id="r_date" type="date" value="${dateBack(0)}"></div>
+      <div class="fld"><label>Needed By</label><input id="r_need" type="date" value="${rdraft.needBy||v.toISOString().slice(0,10)}"></div></div>
+      <label style="font-size:12px;font-weight:600;color:var(--muted)">Items you want priced <span class="hint">— leave cost at 0 if you don't know it yet</span></label>
+      <table class="li-table"><thead><tr><th style="width:44%">Product</th><th class="num">Qty</th><th class="num">Expected Cost</th><th class="num">Amount</th><th></th></tr></thead><tbody id="r_lines"></tbody></table>
+      <button class="btn ghost sm" style="margin-top:8px" onclick="addRLine()">+ Add item</button>
+      <div class="li-sum" id="r_sum"></div>
+      <div class="fld" style="margin-top:14px"><label>Message to supplier <span class="hint">(appears on the RFQ)</span></label><input id="r_note" value="${esc(rdraft.note||'')}" placeholder="e.g. Please quote your best rate and delivery time"></div>
+    </div>
+    <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveRFQ()">Save RFQ</button></div>`,true);
+  renderRLines();}
+function renderRLines(){
+  $('#r_lines').innerHTML=rdraft.items.map((it,i)=>`<tr>
+    <td><select onchange="rdraft.items[${i}].productId=this.value;renderRSum()">${DB.products.map(p=>`<option value="${p.id}" ${p.id===it.productId?'selected':''}>${esc(p.name)}</option>`).join('')}</select></td>
+    <td><input type="number" min="1" value="${it.qty}" oninput="rdraft.items[${i}].qty=+this.value||0;renderRSum()" class="num"></td>
+    <td><input type="number" step="0.01" value="${it.cost}" oninput="rdraft.items[${i}].cost=+this.value||0;renderRSum()" class="num"></td>
+    <td class="num">${cur((it.qty||0)*(it.cost||0))}</td>
+    <td>${rdraft.items.length>1?`<button class="btn ghost sm" onclick="rdraft.items.splice(${i},1);renderRLines()">×</button>`:''}</td></tr>`).join('');
+  renderRSum();}
+function addRLine(){rdraft.items.push({productId:DB.products[0].id,qty:1,cost:0});renderRLines();}
+function renderRSum(){const n=rfqNet(rdraft);$('#r_sum').innerHTML=`<div class="r total"><span>Estimated Value</span><span>${cur(n)}</span></div>`;
+  $('#r_lines').querySelectorAll('tr').forEach((tr,i)=>{const c=tr.children[3];if(c)c.textContent=cur((rdraft.items[i].qty||0)*(rdraft.items[i].cost||0));});}
+function saveRFQ(){
+  rdraft.supplierId=$('#r_sup').value;
+  if(!rdraft.items.some(it=>it.qty>0)){toast('Add at least one item');return;}
+  rList();
+  const ex=rdraft.id?DB.rfqs.find(x=>x.id===rdraft.id):null;
+  const rec={supplierId:rdraft.supplierId,date:$('#r_date').value,needBy:$('#r_need').value,note:$('#r_note').value.trim(),
+    gstRate:rdraft.gstRate,items:rdraft.items.filter(it=>it.qty>0).map(it=>({...it}))};
+  if(ex)Object.assign(ex,rec);
+  else{const no=(DB.company.rfqPrefix||'RFQ')+'-'+String(DB.company.rfqSeq||1).padStart(4,'0');
+    DB.rfqs.push({id:uid('rfq'),no,status:'Sent',...rec});DB.company.rfqSeq++;}
+  save();closeModal();views.rfq();toast('RFQ saved');}
+function rfqPrices(id){const r=rList().find(x=>x.id===id);
+  openModal(`<div class="modal-h"><h3>Supplier's quoted price — ${esc(r.no)}</h3><button class="x" onclick="closeModal()">×</button></div>
+  <div class="modal-b"><p class="hint" style="margin-top:0">Enter the rate the supplier came back with. This updates the RFQ and carries into the Purchase Order.</p>
+  <table class="li-table"><thead><tr><th style="width:50%">Product</th><th class="num">Qty</th><th class="num">Quoted Rate</th></tr></thead><tbody>
+  ${r.items.map((it,i)=>`<tr><td>${esc(prod(it.productId).name)}</td><td class="num">${it.qty}</td>
+    <td><input id="rq_${i}" type="number" step="0.01" value="${it.cost}" class="num" style="width:110px"></td></tr>`).join('')}
+  </tbody></table></div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveRfqPrices('${id}')">Save Prices</button></div>`,true);}
+function saveRfqPrices(id){const r=rList().find(x=>x.id===id);
+  r.items.forEach((it,i)=>{const el=$('#rq_'+i);if(el)it.cost=+el.value||0;});
+  r.status='Quoted';save();closeModal();views.rfq();toast('Prices saved');}
+function viewRFQ(id){const r=rList().find(x=>x.id===id);const s=supp(r.supplierId);const co=DB.company;
+  const rows=r.items.map((it,n)=>{const p=prod(it.productId);return `<tr><td>${n+1}</td><td>${esc(p.name)}<br><span class="hint">${esc(p.material||'')}</span></td><td>${esc(p.hsn||'')}</td><td class="num">${it.qty}</td><td class="num">${it.cost?cur(it.cost):'—'}</td><td class="num">${it.cost?cur(it.qty*it.cost):'—'}</td></tr>`;}).join('');
+  openModal(`<div class="modal-h"><h3>RFQ ${esc(r.no)}</h3><button class="x" onclick="closeModal()">×</button></div>
+   <div class="modal-b" id="printArea">
+     <div style="text-align:center;margin-bottom:6px"><div style="font-size:11px;letter-spacing:2px;color:#7a7390">REQUEST FOR QUOTATION</div></div>
+     <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--plum);padding-bottom:12px;margin-bottom:12px">
+       <div>${logoHtml()}<div style="font-size:23px;font-weight:800;color:var(--plum)">${esc(co.name)}</div><div class="hint">${esc(co.tagline)}</div>${co.address?`<div class="hint">${esc(co.address)}</div>`:''}${co.phone?`<div class="hint">📞 ${esc(co.phone)}</div>`:''}${co.gstin?`<div class="hint"><b>GSTIN:</b> ${esc(co.gstin)}</div>`:''}</div>
+       <div style="text-align:right"><div class="hint">RFQ No.</div><div style="font-weight:700">${esc(r.no)}</div><div class="hint" style="margin-top:5px">Date</div><div>${fmtDate(r.date)}</div>${r.needBy?`<div class="hint" style="margin-top:5px">Needed By</div><div>${fmtDate(r.needBy)}</div>`:''}</div>
+     </div>
+     <div style="margin-bottom:12px;font-size:13px"><span class="hint">To</span><br><b>${esc(s.name||'')}</b>${s.phone?' · '+esc(s.phone):''}<br>${esc(s.address||'')}${s.gstin?'<br>GSTIN: '+esc(s.gstin):''}</div>
+     <p style="font-size:13px;margin:0 0 10px">Kindly quote your best rate and delivery time for the items below.</p>
+     <table><thead><tr><th>#</th><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+     ${rfqNet(r)?`<div class="li-sum"><div class="r total"><span>Estimated Value</span><span>${cur(rfqNet(r))}</span></div></div>`:''}
+     ${r.note?`<div style="margin-top:10px;font-size:12px"><b>Note:</b> ${esc(r.note)}</div>`:''}
+     <p class="hint" style="margin-top:12px">This is a request for pricing only — it is not a Purchase Order and creates no obligation.</p>
+     <div style="margin-top:8px;text-align:right;font-size:12px">For <b>${esc(co.name)}</b><br><br><br><span class="hint">Authorised Signatory</span></div>
+   </div>
+   <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Close</button><button class="btn" onclick="waRFQ('${id}')">📲 WhatsApp</button>
+   ${r.status!=='Converted'?`<button class="btn" onclick="closeModal();rfqToPO('${id}')">➡️ To Purchase Order</button>`:''}
+   <button class="btn gold" onclick="printDoc('RFQ')">🖨️ Print / Save PDF</button></div>`,true);}
+function waRFQ(id){const r=rList().find(x=>x.id===id);const s=supp(r.supplierId);const co=DB.company;
+  const items=r.items.map(it=>prod(it.productId).name+' x'+it.qty).join(', ');
+  waShare(s.phone,`*${co.name}* — RFQ ${r.no}\nDate: ${fmtDate(r.date)}${r.needBy?`\nNeeded by: ${fmtDate(r.needBy)}`:''}\nItems: ${items}\n\nPlease share your best rate and delivery time.${r.note?`\n${r.note}`:''}`);}
+function rfqToPO(id){const r=rList().find(x=>x.id===id);
+  pdraft={supplierId:r.supplierId,status:'Ordered',mode:'Bank',gstRate:r.gstRate||DB.company.gstRate,items:r.items.map(it=>({...it}))};
+  _fromRFQ=id;poModal();}
+function delRFQ(id){const r=rList().find(x=>x.id===id);confirmBox(`Delete RFQ ${r.no}?`,'',()=>{DB.rfqs=rList().filter(x=>x.id!==id);save();views.rfq();toast('RFQ deleted');});}
+let _fromRFQ=null;
 views.purchases=function(){
   const list=[...DB.purchases].sort((a,b)=>b.date.localeCompare(a.date));
   const tot=DB.purchases.filter(p=>p.status!=='Draft').reduce((s,p)=>s+poGross(p),0);
@@ -855,6 +970,7 @@ function savePO(){pdraft.supplierId=$('#p_sup').value;pdraft.status=$('#p_status
   const no=DB.company.poPrefix+'-'+String(DB.company.poSeq).padStart(4,'0');
   const po={id:uid('po'),no,date,supplierId:pdraft.supplierId,items,gstRate:pdraft.gstRate,mode:pdraft.mode,status:pdraft.status,paidAmount:0};
   if(pdraft.status==='Received'){items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=it.qty;p.cost=it.cost;}});po.paidAmount=pdraft.mode==='Credit'?0:poGross(po);}
+  if(_fromRFQ){const r=rList().find(x=>x.id===_fromRFQ);if(r){r.status='Converted';r.poId=po.id;po.rfqId=r.id;}_fromRFQ=null;}
   DB.purchases.push(po);DB.company.poSeq++;save();closeModal();views.purchases();toast('Purchase order '+no+' created');}
 function makeGrn(poId,date,note){const no=DB.company.grnPrefix+'-'+String(DB.company.grnSeq).padStart(4,'0');DB.grns.push({id:uid('gr'),no,date:date||new Date().toISOString().slice(0,10),poId,note:note||''});DB.company.grnSeq++;return no;}
 function receiveGoods(poId,date,note){const po=DB.purchases.find(x=>x.id===poId);if(!po)return null;po.status='Received';po.items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=it.qty;p.cost=it.cost;}});po.paidAmount=po.mode==='Credit'?0:poGross(po);const no=makeGrn(poId,date,note);save();return no;}
@@ -1334,7 +1450,7 @@ function authOn(){const a=authCfg();return !!(a.on&&(a.hash||(DB.company.users||
 /* ---- users & roles ---- */
 const ROLES={owner:'Owner',manager:'Manager',staff:'Staff'};
 const ROLE_HELP={owner:'Full access — everything including Settings, deleting records and accounting.',manager:'All daily work + reports. Cannot open Settings or delete records.',staff:'Sales, inquiries and viewing stock only. No profit, costs or accounting.'};
-const STAFF_BLOCKED=['accounting','reports','settings','expenses','purchases','grn','suppliers'];
+const STAFF_BLOCKED=['accounting','reports','settings','expenses','purchases','grn','suppliers','rfq'];
 const MANAGER_BLOCKED=['settings'];
 function allUsers(){
   const list=(DB.company.users||[]).slice();
