@@ -152,6 +152,9 @@
 const DB_KEY='kridhya_erp_v2';
 const CATEGORIES=['Necklace Set','Earrings','Rings','Bangles','Bracelets','Anklets','Pendants','Maang Tikka','Nose Pins','Hair Accessories','Bridal Set','Other'];
 const MATERIALS=['Gold Plated','Silver Plated','Oxidised','Kundan','Meenakari','Pearl','American Diamond (AD)','Beads','Brass','Alloy','Stone Studded'];
+/* your own materials & categories are kept alongside the built-in ones */
+function matList(){return MATERIALS.concat((DB.company.materials||[]).filter(m=>!MATERIALS.includes(m)));}
+function catList(){return CATEGORIES.concat((DB.company.categories||[]).filter(c=>!CATEGORIES.includes(c)));}
 const EXP_CATS=['Rent','Salaries & Wages','Packaging','Transport / Courier','Marketing & Ads','Electricity','Commission','Repairs','Stationery','Bank Charges','Miscellaneous'];
 const MODES=['Cash','Bank','UPI','Credit'];
 const INQ_STATUS=['New','Following up','Converted','Lost'];
@@ -466,14 +469,46 @@ function editProduct(id){const p=id?DB.products.find(x=>x.id===id):{sku:nextSku(
     <div class="modal-b">
       <div class="fld"><label>Photo of item</label><input type="file" id="f_img" accept="image/*" onchange="previewProdImg(this)"><div class="hint">A clear photo helps with catalogues &amp; sharing.</div><div id="f_imgprev" style="margin-top:8px">${p.image?`<img src="${p.image}" style="width:80px;height:80px;object-fit:cover;border-radius:9px;border:1px solid var(--line)">`:''}</div></div>
       <div class="fld-row"><div class="fld"><label>SKU / Code</label><input id="f_sku" value="${esc(p.sku)}"></div><div class="fld"><label>Product Name</label><input id="f_name" value="${esc(p.name)}" placeholder="e.g. Kundan Necklace Set"></div></div>
-      <div class="fld-row"><div class="fld"><label>Category</label><select id="f_cat">${CATEGORIES.map(c=>`<option ${c===p.category?'selected':''}>${c}</option>`).join('')}</select></div><div class="fld"><label>Material / Finish</label><select id="f_mat">${MATERIALS.map(c=>`<option ${c===p.material?'selected':''}>${c}</option>`).join('')}</select></div></div>
+      <div class="fld-row"><div class="fld"><label>Category</label><div id="catWrap" style="display:flex;gap:6px;align-items:center"></div></div><div class="fld"><label>Material / Finish</label><div id="matWrap" style="display:flex;gap:6px;align-items:center"></div></div></div>
       <div class="fld-row3"><div class="fld"><label>HSN Code</label><input id="f_hsn" value="${esc(p.hsn)}"></div><div class="fld"><label>Cost Price (₹)</label><input id="f_cost" type="number" value="${p.cost}"></div><div class="fld"><label>Selling Price (₹)</label><input id="f_price" type="number" value="${p.price}"></div></div>
       <div class="fld-row"><div class="fld"><label>Reorder Level</label><input id="f_reorder" type="number" value="${p.reorder}"></div><div class="fld"><label>Stock (units)</label><input id="f_stock" type="number" value="${p.stock}"><div class="hint">${id?'Change this to correct your count (records an adjustment).':'Opening stock quantity.'}</div></div></div>
     </div>
     <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveProduct('${id||''}')">Save Product</button></div>`);
+  renderPickers(p.category,p.material);
+}
+/* ---- Category / Material pickers with "add your own" ---- */
+function renderPickers(cat,mat){renderPicker('cat',cat);renderPicker('mat',mat);}
+function renderPicker(kind,sel){
+  const wrap=document.getElementById(kind+'Wrap');if(!wrap)return;
+  const opts=(kind==='cat'?catList():matList());
+  if(sel&&!opts.includes(sel))opts.push(sel);
+  wrap.innerHTML=`<select id="f_${kind}" style="flex:1">${opts.map(c=>`<option ${c===sel?'selected':''}>${esc(c)}</option>`).join('')}</select>
+    <button type="button" class="btn ghost sm" title="Add your own" onclick="newPicker('${kind}')">＋</button>`;
+}
+function newPicker(kind){
+  const wrap=document.getElementById(kind+'Wrap');
+  wrap.innerHTML=`<input id="f_${kind}New" placeholder="${kind==='cat'?'e.g. Nose Ring':'e.g. Rose Gold Plated'}" style="flex:1">
+    <button type="button" class="btn gold sm" onclick="savePicker('${kind}')">Add</button>
+    <button type="button" class="btn ghost sm" onclick="renderPicker('${kind}')">✕</button>`;
+  const el=document.getElementById('f_'+kind+'New');el.focus();
+  el.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();savePicker(kind);}};
+}
+function savePicker(kind){
+  const v=(document.getElementById('f_'+kind+'New').value||'').trim();
+  if(!v){toast('Type a name first');return;}
+  const key=kind==='cat'?'categories':'materials';
+  DB.company[key]=DB.company[key]||[];
+  const all=kind==='cat'?catList():matList();
+  if(all.some(x=>x.toLowerCase()===v.toLowerCase())){toast('That one already exists');renderPicker(kind,all.find(x=>x.toLowerCase()===v.toLowerCase()));return;}
+  DB.company[key].push(v);save();
+  renderPicker(kind,v);
+  toast((kind==='cat'?'Category':'Material')+' “'+v+'” added');
 }
 function nextSku(){return 'KRD-'+String(DB.products.length+1).padStart(3,'0');}
-function saveProduct(id){const g=i=>$('#'+i).value;const o={sku:g('f_sku').trim(),name:g('f_name').trim(),category:g('f_cat'),material:g('f_mat'),hsn:g('f_hsn').trim()||HSN_DEFAULT,cost:+g('f_cost')||0,price:+g('f_price')||0,reorder:+g('f_reorder')||0,image:_prodImg};
+function saveProduct(id){
+  ['cat','mat'].forEach(k=>{const n=document.getElementById('f_'+k+'New');if(n&&n.value.trim())savePicker(k);});
+  const g=i=>{const el=$('#'+i);return el?el.value:'';};
+  const o={sku:g('f_sku').trim(),name:g('f_name').trim(),category:g('f_cat')||CATEGORIES[0],material:g('f_mat')||MATERIALS[0],hsn:g('f_hsn').trim()||HSN_DEFAULT,cost:+g('f_cost')||0,price:+g('f_price')||0,reorder:+g('f_reorder')||0,image:_prodImg};
   if(!o.name){toast('Enter a product name');return;}
   const newStock=+g('f_stock')||0;
   if(id){const p=DB.products.find(x=>x.id===id);const delta=newStock-p.stock;Object.assign(p,o);p.stock=newStock;if(delta!==0)DB.adjustments.push({id:uid('adj'),date:new Date().toISOString().slice(0,10),productId:id,qty:delta,value:delta*p.cost,note:'Edited in product form'});}
