@@ -325,7 +325,38 @@ function printDoc(title){const html=$('#printArea').innerHTML;const w=window.ope
   w.document.close();w.focus();setTimeout(()=>w.print(),300);}
 
 /* ============================ ACCOUNTING ENGINE ============================ */
+/* ================= CHART OF ACCOUNTS (manual accounting) ================= */
+const DEFAULT_COA=[
+  ['Cash','asset'],['Bank','asset'],['Accounts Receivable','asset'],['Inventory','asset'],
+  ['Input CGST','asset'],['Input SGST','asset'],['Input IGST','asset'],['Advance to Suppliers','asset'],
+  ['Furniture & Fixtures','asset'],['Equipment','asset'],['Security Deposit','asset'],
+  ['Accounts Payable','liability'],['Output CGST','liability'],['Output SGST','liability'],['Output IGST','liability'],
+  ['Advance from Customers','liability'],['Salary Payable','liability'],['Loan from Bank','liability'],['Loan from Director','liability'],
+  ['Owner Capital','equity'],['Drawings','equity'],
+  ['Sales','income'],['Other Income','income'],['Discount Received','income'],['Stock Adjustment','income'],
+  ['Purchases','expense'],['Cost of Goods Sold','expense'],['Rent','expense'],['Salary & Wages','expense'],
+  ['Electricity','expense'],['Transport & Freight','expense'],['Packing Material','expense'],['Marketing & Advertising','expense'],
+  ['Bank Charges','expense'],['Professional Fees','expense'],['Repairs & Maintenance','expense'],['Telephone & Internet','expense'],
+  ['Travel','expense'],['Depreciation','expense'],['Office Expenses','expense'],['Discount Allowed','expense'],['Commission Paid','expense']
+];
+const GRPS={asset:'Assets',liability:'Liabilities',equity:'Capital / Equity',income:'Income',expense:'Expenses'};
+function coaList(){if(!DB.company.coa||!DB.company.coa.length)DB.company.coa=DEFAULT_COA.map(([name,grp])=>({name,grp}));return DB.company.coa;}
+function accGrp(n){const a=coaList().find(x=>x.name===n);return a?a.grp:'expense';}
+function manualMode(){return DB.company.manualAccounting!==false;}   // manual is the default
+function manualLines(){
+  const J=[];
+  (DB.journals||[]).forEach(e=>{(e.lines||[]).forEach(l=>{
+    J.push({date:e.date,acc:l.acc,grp:accGrp(l.acc),dr:+l.dr||0,cr:+l.cr||0,ref:e.no||'JV',party:e.party||'',narr:e.narr||''});
+  });});
+  return J;
+}
 function buildJournal(){
+  if(manualMode())return manualLines().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const J=autoLines();
+  manualLines().forEach(l=>J.push(l));
+  return J.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+}
+function autoLines(){
   const J=[];const co=DB.company;
   const add=(date,acc,grp,dr,cr,ref,party,narr)=>J.push({date,acc,grp,dr:dr||0,cr:cr||0,ref:ref||'',party:party||'',narr:narr||''});
   add(co.openingDate,'Cash','asset',co.openingCash||0,0,'OPENING','','Opening cash in hand');
@@ -355,7 +386,7 @@ function buildJournal(){
   });
   DB.expenses.forEach(e=>{const bm=bankMode(e.mode)||'Cash';add(e.date,e.category,'expense',e.amount,0,'EXP',e.note,e.category);add(e.date,bm,'asset',0,e.amount,'EXP',e.note,'Paid '+e.category);});
   (DB.adjustments||[]).forEach(adj=>{const v=Math.abs(adj.value);if(adj.value>=0){add(adj.date,'Inventory','asset',v,0,'ADJ',adj.note,'Stock added');add(adj.date,'Stock Adjustment','income',0,v,'ADJ',adj.note,'Stock gain');}else{add(adj.date,'Stock Adjustment','expense',v,0,'ADJ',adj.note,'Stock loss');add(adj.date,'Inventory','asset',0,v,'ADJ',adj.note,'Stock written off');}});
-  return J.sort((a,b)=>a.date.localeCompare(b.date));
+  return J;
 }
 function ledgerBalances(){const J=buildJournal();const m={};J.forEach(e=>{if(!m[e.acc])m[e.acc]={acc:e.acc,grp:e.grp,dr:0,cr:0};m[e.acc].dr+=e.dr;m[e.acc].cr+=e.cr;});return m;}
 function pnl(){const m=ledgerBalances();let income=0,expense=0;const inc=[],exp=[];Object.values(m).forEach(a=>{if(a.grp==='income'){const v=a.cr-a.dr;income+=v;inc.push({acc:a.acc,amt:v});}if(a.grp==='expense'){const v=a.dr-a.cr;expense+=v;exp.push({acc:a.acc,amt:v});}});return{inc,exp,income,expense,net:income-expense};}
@@ -802,10 +833,115 @@ function delExpense(id){confirmBox('Delete this expense?','',()=>{DB.expenses=DB
 /* ============================ ACCOUNTING ============================ */
 let acctTab='daybook';
 views.accounting=function(){
-  $('#main').innerHTML=header('Books &amp; Reports','Double-entry accounting generated from your transactions',`<button class="btn ghost" onclick="window.print()">🖨️ Print</button>`)
-  +`<div class="tabs">${[['daybook','📅 Day Book'],['cashbook','💵 Cash & Bank'],['ledger','📖 Ledgers'],['trial','⚖️ Trial Balance'],['pnl','📈 Profit & Loss'],['bs','🏦 Balance Sheet'],['gst','🧮 GST Report']].map(([k,l])=>`<button class="${acctTab===k?'on':''}" onclick="acctTab='${k}';views.accounting()">${l}</button>`).join('')}</div><div id="acctBody"></div>`;
-  ({daybook:acctDaybook,cashbook:acctCashbook,ledger:acctLedger,trial:acctTrial,pnl:acctPnl,bs:acctBS,gst:acctGST}[acctTab])();
+  $('#main').innerHTML=header('Books &amp; Reports',manualMode()?'Manual double-entry — you record every entry yourself':'Double-entry accounting generated from your transactions',
+    `<button class="btn gold" onclick="jvModal()">+ New Entry</button> <button class="btn ghost" onclick="window.print()">🖨️ Print</button>`)
+  +`<div class="tabs">${[['journal','✍️ Journal Entries'],['daybook','📅 Day Book'],['cashbook','💵 Cash & Bank'],['ledger','📖 Ledgers'],['trial','⚖️ Trial Balance'],['pnl','📈 Profit & Loss'],['bs','🏦 Balance Sheet'],['gst','🧮 GST Report'],['coa','🗂️ Chart of Accounts']].map(([k,l])=>`<button class="${acctTab===k?'on':''}" onclick="acctTab='${k}';views.accounting()">${l}</button>`).join('')}</div><div id="acctBody"></div>`;
+  ({journal:acctJournal,daybook:acctDaybook,cashbook:acctCashbook,ledger:acctLedger,trial:acctTrial,pnl:acctPnl,bs:acctBS,gst:acctGST,coa:acctCOA}[acctTab]||acctJournal)();
 };
+/* ---------------- Journal Entries (manual) ---------------- */
+function jvTotals(e){const d=(e.lines||[]).reduce((s,l)=>s+(+l.dr||0),0),c=(e.lines||[]).reduce((s,l)=>s+(+l.cr||0),0);return{dr:d,cr:c,ok:Math.abs(d-c)<0.01&&d>0};}
+/* Build draft journal entries from existing invoices / purchases / expenses */
+function autoDraftPending(){
+  const done=new Set((DB.journals||[]).map(e=>e.src).filter(Boolean));
+  const byRef={};
+  autoLines().forEach(l=>{if(!l.ref||l.ref==='OPENING')return;const k=l.ref+'|'+l.date;(byRef[k]=byRef[k]||{ref:l.ref,date:l.date,party:l.party,lines:[]}).lines.push(l);});
+  return Object.entries(byRef).filter(([k])=>!done.has(k)).map(([k,v])=>({key:k,...v}));
+}
+function autoDraftRun(){
+  const pend=autoDraftPending();
+  if(!pend.length){toast('Nothing new to generate — all transactions already have entries');return;}
+  confirmBox('Create '+pend.length+' journal entr'+(pend.length===1?'y':'ies')+'?','These are drafted from your invoices, purchases, expenses and returns. You can edit or delete any of them afterwards.',()=>{
+    DB.journals=DB.journals||[];
+    pend.forEach(p=>{DB.journals.push({id:uid('jv'),no:p.ref,date:p.date,party:p.party||'',narr:'Auto entry for '+p.ref,src:p.key,lines:p.lines.map(l=>({acc:l.acc,dr:l.dr,cr:l.cr}))});});
+    save();toast(pend.length+' entries created');views.accounting();
+  });
+}
+function acctJournal(){
+  const list=(DB.journals||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const pend=autoDraftPending().length;
+  $('#acctBody').innerHTML=`
+  <div class="card" style="margin-bottom:14px"><div style="padding:14px 18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+    <b>Entry mode:</b>
+    <button class="btn ${manualMode()?'gold':'ghost'} sm" onclick="setAcctMode(true)">✍️ Manual only</button>
+    <button class="btn ${manualMode()?'ghost':'gold'} sm" onclick="setAcctMode(false)">⚡ Automatic + manual</button>
+    <span class="hint" style="flex:1;min-width:220px">${manualMode()?'Books show <b>only</b> the entries you write yourself.':'Invoices &amp; purchases post themselves, <b>plus</b> anything you write here.'}</span>
+    <button class="btn ghost sm" onclick="autoDraftRun()">🪄 Generate entries from transactions${pend?' ('+pend+')':''}</button>
+  </div></div>
+  ${manualMode()?`<div class="card" style="margin-bottom:14px;border-left:4px solid var(--gold)"><div style="padding:14px 18px"><b>Manual mode is ON.</b> <span class="hint">Invoices, purchases and expenses do <b>not</b> post automatically. Use <b>🪄 Generate entries</b> above to draft them from your transactions, then edit as you like.</span></div></div>`:''}
+  <div class="card"><div class="panel-h"><h3>Journal Entries</h3><span class="hint">${list.length} entr${list.length===1?'y':'ies'}</span></div>
+  <table><thead><tr><th>Date</th><th>No.</th><th>Narration</th><th>Accounts</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+  ${list.length?list.map(e=>{const t=jvTotals(e);return `<tr><td>${fmtDate(e.date)}</td><td><span class="hint">${esc(e.no||'')}</span></td><td>${esc(e.narr||'')}${e.party?`<br><span class="hint">${esc(e.party)}</span>`:''}</td>
+    <td><span class="hint">${(e.lines||[]).map(l=>`${esc(l.acc)} ${(+l.dr||0)?'Dr':'Cr'}`).join(' · ')}</span></td>
+    <td class="num"><b>${cur(t.dr)}</b></td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn ghost sm" onclick="jvModal('${e.id}')">Edit</button> <button class="btn ghost sm" onclick="jvDel('${e.id}')">Delete</button></td></tr>`;}).join('')
+    :`<tr><td colspan="6"><div class="empty">No entries yet. Click <b>+ New Entry</b> to record your first one.</div></td></tr>`}
+  </tbody></table></div>`;
+}
+function jvModal(id){
+  const e=(DB.journals||[]).find(x=>x.id===id)||{date:dateBack(0),narr:'',party:'',lines:[{acc:'',dr:'',cr:''},{acc:'',dr:'',cr:''}]};
+  window._jvLines=JSON.parse(JSON.stringify(e.lines&&e.lines.length?e.lines:[{acc:'',dr:'',cr:''},{acc:'',dr:'',cr:''}]));
+  openModal(`<div class="modal-h"><h3>${id?'Edit Journal Entry':'New Journal Entry'}</h3><button class="x" onclick="closeModal()">×</button></div>
+  <div class="modal-b">
+    <div class="fld-row3"><div class="fld"><label>Date</label><input id="jv_date" type="date" value="${e.date||dateBack(0)}"></div>
+    <div class="fld"><label>Entry No.</label><input id="jv_no" value="${esc(e.no||('JV-'+((DB.journals||[]).length+1)))}"></div>
+    <div class="fld"><label>Party / Reference <span class="hint">(optional)</span></label><input id="jv_party" value="${esc(e.party||'')}" placeholder="e.g. Sharma Traders"></div></div>
+    <div class="fld"><label>Narration</label><input id="jv_narr" value="${esc(e.narr||'')}" placeholder="e.g. Shop rent paid for July"></div>
+    <div id="jvLines"></div>
+    <button class="btn ghost sm" style="margin-top:8px" onclick="jvAddLine()">+ Add line</button>
+    <div id="jvSum" style="margin-top:12px"></div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="jvSave('${id||''}')">Save Entry</button></div>`,true);
+  jvRender();
+}
+function jvOpts(sel){const g={};coaList().forEach(a=>{(g[a.grp]=g[a.grp]||[]).push(a.name);});
+  return `<option value="">— select account —</option>`+Object.keys(GRPS).filter(k=>g[k]).map(k=>`<optgroup label="${GRPS[k]}">${g[k].sort().map(n=>`<option ${n===sel?'selected':''}>${esc(n)}</option>`).join('')}</optgroup>`).join('');}
+function jvRender(){
+  const L=window._jvLines;
+  $('#jvLines').innerHTML=`<table style="width:100%;margin-top:6px"><thead><tr><th style="text-align:left">Account</th><th class="num" style="width:130px">Debit</th><th class="num" style="width:130px">Credit</th><th style="width:34px"></th></tr></thead><tbody>
+  ${L.map((l,i)=>`<tr>
+    <td><select onchange="_jvLines[${i}].acc=this.value" style="width:100%">${jvOpts(l.acc)}</select></td>
+    <td><input type="number" step="0.01" value="${l.dr||''}" oninput="_jvLines[${i}].dr=this.value;if(this.value)_jvLines[${i}].cr='';jvSum()" style="width:100%;text-align:right"></td>
+    <td><input type="number" step="0.01" value="${l.cr||''}" oninput="_jvLines[${i}].cr=this.value;if(this.value)_jvLines[${i}].dr='';jvSum()" style="width:100%;text-align:right"></td>
+    <td>${L.length>2?`<button class="btn ghost sm" onclick="_jvLines.splice(${i},1);jvRender()">×</button>`:''}</td></tr>`).join('')}
+  </tbody></table>`;
+  jvSum();
+}
+function jvAddLine(){window._jvLines.push({acc:'',dr:'',cr:''});jvRender();}
+function jvSum(){const L=window._jvLines;const d=L.reduce((s,l)=>s+(+l.dr||0),0),c=L.reduce((s,l)=>s+(+l.cr||0),0);const ok=Math.abs(d-c)<0.01&&d>0;
+  $('#jvSum').innerHTML=`<div style="display:flex;gap:18px;align-items:center;padding:10px 14px;border-radius:10px;background:${ok?'#eaf7ee':'#fdf1f1'}">
+    <b>Debit ${cur(d)}</b><b>Credit ${cur(c)}</b>
+    <span style="margin-left:auto;font-weight:700;color:${ok?'#1e7b34':'#c0392b'}">${ok?'✓ Balanced':(d||c)?'Difference '+cur(Math.abs(d-c)):'Enter amounts'}</span></div>`;}
+function jvSave(id){
+  const lines=window._jvLines.filter(l=>l.acc&&((+l.dr||0)||(+l.cr||0))).map(l=>({acc:l.acc,dr:+l.dr||0,cr:+l.cr||0}));
+  if(lines.length<2){toast('Add at least two lines with an account and amount');return;}
+  const d=lines.reduce((s,l)=>s+l.dr,0), c=lines.reduce((s,l)=>s+l.cr,0);
+  if(Math.abs(d-c)>0.01){toast('Debit and Credit must be equal — difference '+cur(Math.abs(d-c)));return;}
+  DB.journals=DB.journals||[];
+  const rec={id:id||uid('jv'),no:$('#jv_no').value.trim(),date:$('#jv_date').value,narr:$('#jv_narr').value.trim(),party:$('#jv_party').value.trim(),lines};
+  const ex=DB.journals.find(x=>x.id===id);
+  if(ex)Object.assign(ex,rec);else DB.journals.push(rec);
+  save();closeModal();toast('Entry saved');views.accounting();
+}
+function jvDel(id){const e=(DB.journals||[]).find(x=>x.id===id);if(!e)return;
+  confirmBox('Delete this entry?',(e.narr||'')+' — '+cur(jvTotals(e).dr),()=>{DB.journals=DB.journals.filter(x=>x.id!==id);save();toast('Entry deleted');views.accounting();});}
+/* ---------------- Chart of Accounts ---------------- */
+function acctCOA(){
+  const g={};coaList().forEach(a=>{(g[a.grp]=g[a.grp]||[]).push(a);});
+  $('#acctBody').innerHTML=`<div class="card"><div class="panel-h"><h3>Chart of Accounts</h3><button class="btn gold sm" onclick="coaModal()">+ Add Account</button></div><div style="padding:18px">
+  ${Object.keys(GRPS).map(k=>`<div style="margin-bottom:16px"><div class="grp" style="margin-bottom:6px">${GRPS[k]}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">${(g[k]||[]).sort((a,b)=>a.name.localeCompare(b.name)).map(a=>`<span class="pill" style="background:#f2eefa;color:#4a3168">${esc(a.name)} <a onclick="coaDel('${esc(a.name)}')" style="cursor:pointer;color:#a33">×</a></span>`).join('')||'<span class="hint">none</span>'}</div></div>`).join('')}
+  </div></div>`;
+}
+function coaModal(){openModal(`<div class="modal-h"><h3>Add Account</h3><button class="x" onclick="closeModal()">×</button></div>
+  <div class="modal-b"><div class="fld"><label>Account Name</label><input id="coa_n" placeholder="e.g. Shop Rent"></div>
+  <div class="fld"><label>Type</label><select id="coa_g">${Object.keys(GRPS).map(k=>`<option value="${k}">${GRPS[k]}</option>`).join('')}</select></div></div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="coaSave()">Add</button></div>`);}
+function coaSave(){const n=$('#coa_n').value.trim();if(!n){toast('Enter a name');return;}
+  if(coaList().some(a=>a.name.toLowerCase()===n.toLowerCase())){toast('That account already exists');return;}
+  DB.company.coa.push({name:n,grp:$('#coa_g').value});save();closeModal();toast('Account added');views.accounting();}
+function coaDel(n){const used=(DB.journals||[]).some(e=>(e.lines||[]).some(l=>l.acc===n));
+  if(used){toast('Cannot remove — it is used in an entry');return;}
+  confirmBox('Remove account?',n,()=>{DB.company.coa=coaList().filter(a=>a.name!==n);save();toast('Removed');views.accounting();});}
 function acctDaybook(){const J=buildJournal().filter(e=>e.ref!=='OPENING');
   $('#acctBody').innerHTML=`<div class="card"><div class="panel-h"><h3>Day Book — all journal entries</h3><span class="hint">${J.length} lines</span></div>
     <table><thead><tr><th>Date</th><th>Ref</th><th>Account</th><th>Particulars</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
@@ -1031,6 +1167,11 @@ views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
       <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn gold" onclick="saveAuth()">Save login settings</button>${authOn()?'<button class="btn ghost" onclick="lockNow()">🔒 Lock now</button>':''}</div>
       <p class="hint" style="margin-bottom:0;margin-top:14px">⚠️ This is a screen lock to keep casual users out — your data’s real privacy comes from your Sync Code. Never share either.</p>
     </div></div>
+    <div class="card" style="margin-top:18px"><div class="panel-h"><h3>📒 Accounting Mode</h3><span class="hint">${manualMode()?'manual entry':'automatic'}</span></div><div style="padding:20px">
+      <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;margin:0 0 10px"><input type="checkbox" id="ac_manual" ${manualMode()?'checked':''} onchange="toggleManual(this.checked)" style="margin-top:3px">
+      <span><b>Manual accounting</b> — I record every journal entry myself.<br><span class="hint">Books show only what you enter in <b>Books → Journal Entries</b>. Invoices, purchases and expenses will <b>not</b> post automatically.</span></span></label>
+      <p class="hint" style="margin:0">Unticking this returns to automatic posting, where every invoice and purchase writes its own double entry. Your manual entries are always kept either way.</p>
+    </div></div>
     <div class="card" style="margin-top:18px"><div class="panel-h"><h3>👥 Users &amp; Roles</h3><span class="hint">${allUsers().length} user(s)</span></div><div style="padding:20px">
       <p class="hint" style="margin-top:0">Give each person their own login. <b>Owner</b> — ${ROLE_HELP.owner} <b>Manager</b> — ${ROLE_HELP.manager} <b>Staff</b> — ${ROLE_HELP.staff}</p>
       <div style="overflow:auto"><table class="tbl"><thead><tr><th>Name</th><th>Login ID</th><th>Email</th><th>Role</th><th></th></tr></thead><tbody>
@@ -1039,6 +1180,8 @@ views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
       <button class="btn gold" style="margin-top:14px" onclick="userModal()">+ Add User</button>
     </div></div>`;
 };
+function toggleManual(on){DB.company.manualAccounting=!!on;save();toast(on?'Manual accounting ON':'Automatic posting ON');go('settings');}
+function setAcctMode(manual){DB.company.manualAccounting=!!manual;save();toast(manual?'Manual entry only':'Automatic + manual');views.accounting();}
 function userModal(id){
   const u=(DB.company.users||[]).find(x=>x.id===id)||{};
   openModal(`<div class="modal-h"><h3>${id?'Edit User':'Add User'}</h3><button class="x" onclick="closeModal()">×</button></div>
