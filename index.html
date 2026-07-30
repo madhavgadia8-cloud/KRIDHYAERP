@@ -195,8 +195,17 @@ const DB_KEY='kridhya_erp_v2';
 const CATEGORIES=['Necklace Set','Earrings','Rings','Bangles','Bracelets','Anklets','Pendants','Maang Tikka','Nose Pins','Hair Accessories','Bridal Set','Other'];
 const MATERIALS=['Gold Plated','Silver Plated','Oxidised','Kundan','Meenakari','Pearl','American Diamond (AD)','Beads','Brass','Alloy','Stone Studded'];
 /* your own materials & categories are kept alongside the built-in ones */
+const COLOURS=['Gold','Rose Gold','Silver','Oxidised Silver','Antique Gold','Two-Tone','White','Black','Red','Green','Blue','Pink','Maroon','Multicolour'];
 function matList(){return MATERIALS.concat((DB.company.materials||[]).filter(m=>!MATERIALS.includes(m)));}
 function catList(){return CATEGORIES.concat((DB.company.categories||[]).filter(c=>!CATEGORIES.includes(c)));}
+function colList(){return COLOURS.concat((DB.company.colours||[]).filter(c=>!COLOURS.includes(c)));}
+const PO_TERMS=`1. Payment terms: 50% advance with order, balance against delivery.
+2. Delivery timeline: within 15 days from date of this Purchase Order.
+3. Delivery timeline in case of reorder: within 10 days from date of reorder confirmation.
+4. BIS hallmarking: all applicable items must carry valid BIS hallmarking.
+5. All jewellery to be made using 92.5 silver with coating as discussed.
+6. Any defect during transit is on the supplier's account.
+7. All disputes arising out of this Purchase Order are subject to Jodhpur Jurisdiction only.`;
 const EXP_CATS=['Rent','Salaries & Wages','Packaging','Transport / Courier','Marketing & Ads','Electricity','Commission','Repairs','Stationery','Bank Charges','Miscellaneous'];
 const MODES=['Cash','Bank','UPI','Credit'];
 const INQ_STATUS=['New','Following up','Converted','Lost'];
@@ -512,6 +521,7 @@ function editProduct(id){const p=id?DB.products.find(x=>x.id===id):{sku:nextSku(
       <div class="fld"><label>Photo of item</label><input type="file" id="f_img" accept="image/*" onchange="previewProdImg(this)"><div class="hint">A clear photo helps with catalogues &amp; sharing.</div><div id="f_imgprev" style="margin-top:8px">${p.image?`<img src="${p.image}" style="width:80px;height:80px;object-fit:cover;border-radius:9px;border:1px solid var(--line)">`:''}</div></div>
       <div class="fld-row"><div class="fld"><label>SKU / Code</label><input id="f_sku" value="${esc(p.sku)}"></div><div class="fld"><label>Product Name</label><input id="f_name" value="${esc(p.name)}" placeholder="e.g. Kundan Necklace Set"></div></div>
       <div class="fld-row"><div class="fld"><label>Category</label><div id="catWrap" style="display:flex;gap:6px;align-items:center"></div></div><div class="fld"><label>Material / Finish</label><div id="matWrap" style="display:flex;gap:6px;align-items:center"></div></div></div>
+      <div class="fld"><label>Colour</label><input id="f_col" list="colOptsP" value="${esc(p.colour||'')}" placeholder="e.g. Rose Gold — type your own if not listed"><datalist id="colOptsP">${colList().map(c=>`<option>${esc(c)}</option>`).join('')}</datalist></div>
       <div class="fld-row3"><div class="fld"><label>HSN Code</label><input id="f_hsn" value="${esc(p.hsn)}"></div><div class="fld"><label>Cost Price (₹)</label><input id="f_cost" type="number" value="${p.cost}"></div><div class="fld"><label>Selling Price (₹)</label><input id="f_price" type="number" value="${p.price}"></div></div>
       <div class="fld-row"><div class="fld"><label>Reorder Level</label><input id="f_reorder" type="number" value="${p.reorder}"></div><div class="fld"><label>Stock (units)</label><input id="f_stock" type="number" value="${p.stock}"><div class="hint">${id?'Change this to correct your count (records an adjustment).':'Opening stock quantity.'}</div></div></div>
     </div>
@@ -550,7 +560,9 @@ function nextSku(){return 'KRD-'+String(DB.products.length+1).padStart(3,'0');}
 function saveProduct(id){
   ['cat','mat'].forEach(k=>{const n=document.getElementById('f_'+k+'New');if(n&&n.value.trim())savePicker(k);});
   const g=i=>{const el=$('#'+i);return el?el.value:'';};
-  const o={sku:g('f_sku').trim(),name:g('f_name').trim(),category:g('f_cat')||CATEGORIES[0],material:g('f_mat')||MATERIALS[0],hsn:g('f_hsn').trim()||HSN_DEFAULT,cost:+g('f_cost')||0,price:+g('f_price')||0,reorder:+g('f_reorder')||0,image:_prodImg};
+  const colV=g('f_col').trim();
+  if(colV&&!colList().some(c=>c.toLowerCase()===colV.toLowerCase())){DB.company.colours=DB.company.colours||[];DB.company.colours.push(colV);}
+  const o={sku:g('f_sku').trim(),name:g('f_name').trim(),category:g('f_cat')||CATEGORIES[0],material:g('f_mat')||MATERIALS[0],colour:colV,hsn:g('f_hsn').trim()||HSN_DEFAULT,cost:+g('f_cost')||0,price:+g('f_price')||0,reorder:+g('f_reorder')||0,image:_prodImg};
   if(!o.name){toast('Enter a product name');return;}
   const newStock=+g('f_stock')||0;
   if(id){const p=DB.products.find(x=>x.id===id);const delta=newStock-p.stock;Object.assign(p,o);p.stock=newStock;if(delta!==0)DB.adjustments.push({id:uid('adj'),date:new Date().toISOString().slice(0,10),productId:id,qty:delta,value:delta*p.cost,note:'Edited in product form'});}
@@ -690,13 +702,14 @@ function openDoc(t,id){
   if(ex){D=JSON.parse(JSON.stringify(ex));D._type=t;D._id=id;}
   else{D={_type:t,_id:null,no:docNextNo(t),date:dateBack(0),ref:'',
     partyId:'',partyName:'',partyAddr:'',partyGstin:'',
-    intro:DB.company.introText||d.intro, terms:DB.company.termsText||'',
+    intro:DB.company.introText||d.intro,
+    terms:(t==='po'?(DB.company.poTerms||PO_TERMS):(DB.company.termsText||'')),
     items:[blankItem()], gstRate:DB.company.gstRate, discount:0,
     status:t==='inv'?'Paid':(t==='po'?'Ordered':'Open'), mode:'Cash', validUntil:'', needBy:''};}
   D.items=(D.items&&D.items.length?D.items:[blankItem()]).map(normItem);
   go('docedit');
 }
-function blankItem(){return{productId:'',desc:'',delivery:'',qty:1,unit:'Pcs',price:0,cost:0,disc:0};}
+function blankItem(){return{productId:'',desc:'',colour:'',delivery:'',qty:1,unit:'Pcs',price:0,cost:0,disc:0};}
 function normItem(it){const o=Object.assign(blankItem(),it);
   if(!o.desc&&o.productId){const p=prod(o.productId);if(p&&p.name)o.desc=p.name+(p.material?' — '+p.material:'');}
   if(o.price===undefined||o.price===null)o.price=0;
@@ -726,6 +739,7 @@ views.docedit=function(){
     <button class="btn ghost" onclick="printDoc('${d.title}')">🖨️ Print / PDF</button>
     <button class="btn gold" onclick="docSave()">💾 Save</button>
   </div>
+  <datalist id="colOpts">${colList().map(c=>`<option>${esc(c)}</option>`).join('')}</datalist>
   <div class="docsheet" id="printArea">
     <div class="dhead">
       <div class="dco">${logoHtml()}<div class="dconame">${esc(co.name)}</div>
@@ -756,11 +770,12 @@ views.docedit=function(){
       </div>
     </div>
     ${t!=='inv'?`<textarea class="dintro" rows="2" oninput="D.intro=this.value">${esc(D.intro||'')}</textarea>`:''}
-    <table class="dtable"><thead><tr><th style="width:34px">Sl.</th><th>Description</th><th style="width:110px">Delivery</th><th style="width:66px">Qty</th><th style="width:78px">Unit</th><th style="width:100px">Rate</th><th style="width:88px">Disc</th><th style="width:110px">Amount</th><th class="no-print" style="width:38px"></th></tr></thead><tbody>
+    <table class="dtable"><thead><tr><th style="width:34px">Sl.</th><th>Description</th><th style="width:104px">Colour</th><th style="width:104px">Delivery</th><th style="width:62px">Qty</th><th style="width:74px">Unit</th><th style="width:94px">Rate</th><th style="width:82px">Disc</th><th style="width:104px">Amount</th><th class="no-print" style="width:38px"></th></tr></thead><tbody>
     ${D.items.map((it,i)=>`<tr>
       <td>${i+1}</td>
       <td><textarea rows="2" placeholder="Item description" oninput="D.items[${i}].desc=this.value">${esc(it.desc||'')}</textarea>
           <select class="no-print dprod" onchange="docPickProd(${i},this.value)"><option value="">— insert product —</option>${DB.products.map(p=>`<option value="${p.id}" ${p.id===it.productId?'selected':''}>${esc(p.name)}</option>`).join('')}</select></td>
+      <td><input list="colOpts" value="${esc(it.colour||'')}" placeholder="—" oninput="D.items[${i}].colour=this.value"></td>
       <td><input value="${esc(it.delivery||'')}" placeholder="—" oninput="D.items[${i}].delivery=this.value"></td>
       <td><input type="number" class="num" value="${it.qty}" oninput="docSet(${i},'qty',this.value)"></td>
       <td><select onchange="D.items[${i}].unit=this.value">${UNITS.concat(UNITS.includes(it.unit)?[]:[it.unit]).map(u=>`<option ${u===it.unit?'selected':''}>${esc(u)}</option>`).join('')}</select></td>
@@ -789,7 +804,7 @@ views.docedit=function(){
 };
 function docSet(i,k,v){const it=D.items[i];
   if(k==='rate')docSetRate(it,v); else it[k]=+v||0;
-  const tr=$('.dtable tbody').children[i];if(tr)tr.children[7].innerHTML='<b>'+cur(docAmt(it))+'</b>';
+  const tr=$('.dtable tbody').children[i];if(tr)tr.children[8].innerHTML='<b>'+cur(docAmt(it))+'</b>';
   docRefreshTotals();}
 function docRefreshTotals(){const T=docTotals();const box=$('.dtot');if(!box)return;
   const rows=box.querySelectorAll('.dr');
@@ -798,6 +813,7 @@ function docRefreshTotals(){const T=docTotals();const box=$('.dtot');if(!box)ret
   const w=$('.dwords');if(w)w.innerHTML='<b>Amount in words:</b> '+rupeesWords(T.total);}
 function docPickProd(i,pid){const it=D.items[i];it.productId=pid;
   if(pid){const p=prod(pid);it.desc=p.name+(p.material?' — '+p.material:'');
+    if(p.colour)it.colour=p.colour;
     if(D._type==='po'||D._type==='rfq')it.cost=p.cost||0;else it.price=p.price||0;}
   views.docedit();}
 function docPickParty(id){const d=DOCT[D._type];const p=(d.side==='sup'?DB.suppliers:DB.customers).find(x=>x.id===id);
@@ -1604,7 +1620,8 @@ views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
       <div class="fld-row"><div class="fld"><label>UPI ID</label><input id="co_upi" value="${esc(c.upi||'')}" placeholder="name@bank"></div><div class="fld"><label>PAN</label><input id="co_pan" value="${esc(c.pan||'')}" placeholder="ABCDE1234F"></div></div>
       <div class="fld"><label>Banker <span class="hint">(shown on documents)</span></label><input id="co_banker" value="${esc(c.banker||'')}" placeholder="State Bank of India, Main Branch"></div>
       <div class="fld"><label>Default letter on Quotation / PI / PO</label><textarea id="co_intro" rows="2" placeholder="Dear Sir, ...">${esc(c.introText||'')}</textarea><div class="hint">Editable on each document. Leave blank to use the standard wording.</div></div>
-      <div class="fld"><label>Default Terms &amp; Conditions</label><textarea id="co_terms" rows="2" placeholder="1. Payment: 50% advance...">${esc(c.termsText||'')}</textarea></div>
+      <div class="fld"><label>Default Terms &amp; Conditions <span class="hint">(Quotation / PI / Invoice)</span></label><textarea id="co_terms" rows="2" placeholder="1. Payment: 50% advance...">${esc(c.termsText||'')}</textarea></div>
+      <div class="fld"><label>Purchase Order Terms &amp; Conditions <span class="hint">(sent to suppliers)</span></label><textarea id="co_poterms" rows="8">${esc(c.poTerms||PO_TERMS)}</textarea><div class="hint">Appears on every new PO — edit the numbers/timelines to match your agreement. Still editable per order.</div></div>
       <div class="fld"><label>Business Logo</label><input type="file" id="co_logofile" accept="image/*" onchange="previewLogo(this)"><div class="hint">Appears on invoices, quotes &amp; credit notes.</div><div id="co_logoprev" style="margin-top:8px">${c.logo?`<img src="${c.logo}" style="height:60px;border-radius:8px;border:1px solid var(--line)">`:''}</div></div>
       <button class="btn gold" onclick="saveSettings()">Save Settings</button>
     </div></div>
@@ -1683,7 +1700,7 @@ async function saveUser(id){
 }
 function delUser(id){const u=(DB.company.users||[]).find(x=>x.id===id);if(!u)return;
   confirmBox('Remove '+(u.name||u.user)+'?','They will no longer be able to sign in.',()=>{DB.company.users=DB.company.users.filter(x=>x.id!==id);save();toast('User removed');go('settings');});}
-function saveSettings(){const g=i=>$('#'+i).value;Object.assign(DB.company,{name:g('co_name'),tagline:g('co_tag'),phone:g('co_phone'),email:g('co_email'),address:g('co_addr'),gstin:g('co_gstin'),state:g('co_state'),gstRate:+g('co_gst')||0,invPrefix:g('co_invp'),currency:g('co_cur')||'₹',bankName:g('co_bank'),accountNo:g('co_acc'),ifsc:g('co_ifsc'),upi:g('co_upi'),pan:g('co_pan'),banker:g('co_banker'),introText:g('co_intro'),termsText:g('co_terms'),openingCash:+g('co_ocash')||0,openingInventory:+g('co_oinv')||0,logo:_logoImg});save();toast('Settings saved');go('settings');}
+function saveSettings(){const g=i=>$('#'+i).value;Object.assign(DB.company,{name:g('co_name'),tagline:g('co_tag'),phone:g('co_phone'),email:g('co_email'),address:g('co_addr'),gstin:g('co_gstin'),state:g('co_state'),gstRate:+g('co_gst')||0,invPrefix:g('co_invp'),currency:g('co_cur')||'₹',bankName:g('co_bank'),accountNo:g('co_acc'),ifsc:g('co_ifsc'),upi:g('co_upi'),pan:g('co_pan'),banker:g('co_banker'),introText:g('co_intro'),termsText:g('co_terms'),poTerms:g('co_poterms'),openingCash:+g('co_ocash')||0,openingInventory:+g('co_oinv')||0,logo:_logoImg});save();toast('Settings saved');go('settings');}
 function exportData(){DB.company.lastBackup=new Date().toISOString().slice(0,10);save();const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='kridhya-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();toast('Backup downloaded');}
 function importData(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.products)throw 0;DB=migrate(d);save();toast('Data imported');go('dashboard');}catch(e){toast('Invalid backup file');}};r.readAsText(f);}
 function resetData(){confirmBox('Reset ALL data?','This restores demo sample data and erases your records. Export a backup first!',()=>{localStorage.removeItem(DB_KEY);DB=load();go('dashboard');toast('Data reset');});}
