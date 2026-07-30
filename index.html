@@ -94,7 +94,7 @@
   .dtermsblock{margin-top:18px;padding-top:14px;border-top:1px dashed var(--line)}
   .dtermstitle{font-size:11px;letter-spacing:1.6px;color:#8a7fa0;margin-bottom:8px}
   .dterms{border-color:#eee6f5!important}
-  .dtermsprint,.prthead{display:none}
+  .dtermsprint,.prthead,.dfoot{display:none}
   .dsign{margin-top:22px;text-align:right;font-size:12.5px}
   @media print{
     .no-print,.side,.docbar{display:none!important}
@@ -108,6 +108,10 @@
     .dterms{display:none!important}
     .dtermsprint{display:block;white-space:pre-wrap;font-size:12.5px;line-height:1.75}
     .dsign{page-break-inside:avoid}
+    .dfoot{display:flex;align-items:center;gap:14px;border-top:3px solid #c9a227;padding-top:10px;margin-top:28px;font-size:11px;color:#4a3168;page-break-inside:avoid}
+    .dfoot img{max-width:52px;border-radius:6px}
+    .dfoottxt{flex:1;line-height:1.5}
+    .dfootno{text-align:right;font-weight:700;white-space:nowrap}
   }
   @media(max-width:820px){.dhead{flex-direction:column}.dttl{text-align:left;min-width:0}.dnorow{justify-content:flex-start}.dgrid{grid-template-columns:1fr}.dto{border-right:0;padding-right:0}.dref{padding-left:0}}
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
@@ -823,6 +827,14 @@ views.docedit=function(){
       <div class="fld"><label>Mode</label><select onchange="D.mode=this.value">${MODES.map(s=>`<option ${s===D.mode?'selected':''}>${s}</option>`).join('')}</select></div></div>`:''}
     ${t==='po'?`<div class="no-print" style="margin-top:10px;max-width:220px"><div class="fld"><label>Status</label><select onchange="D.status=this.value">${['Draft','Ordered','Received'].map(s=>`<option ${s===D.status?'selected':''}>${s}</option>`).join('')}</select><div class="hint">Stock updates when set to Received.</div></div></div>`:''}
     <div class="dsign">For <b>${esc(co.name)}</b><br><br><br><span class="hint">Authorised Signatory</span></div>
+    <div class="dfoot">
+      ${logoHtml()}
+      <div class="dfoottxt"><b>${esc(co.name)}</b>${co.tagline?' · '+esc(co.tagline):''}
+        <div>${co.address?esc(co.address):''}${co.phone?' · 📞 '+esc(co.phone):''}</div>
+        <div>${co.gstin?'GSTIN: '+esc(co.gstin):''}${co.pan?' · PAN: '+esc(co.pan):''}</div>
+      </div>
+      <div class="dfootno">${d.title} ${esc(D.no)}<br><span class="hint">${fmtDate(D.date)}</span></div>
+    </div>
   </div>`;
 };
 function docSet(i,k,v){const it=D.items[i];
@@ -885,6 +897,10 @@ function docPrint(){
   .dtermstitle{font-size:12.5px;font-weight:700;letter-spacing:1.4px;color:#3b2560;margin-bottom:10px}
   .dtermsprint{display:block;white-space:pre-wrap;font-size:12.5px;line-height:1.85}
   .dsign{margin-top:30px;text-align:right;font-size:12px;page-break-inside:avoid}
+  .dfoot{display:flex;align-items:center;gap:14px;border-top:3px solid #c9a227;padding-top:10px;margin-top:28px;font-size:11px;color:#4a3168;page-break-inside:avoid}
+  .dfoot img{max-width:52px;border-radius:6px}
+  .dfoottxt{flex:1;line-height:1.5}
+  .dfootno{text-align:right;font-weight:700;white-space:nowrap}
   .hint{color:#7a7390;font-size:11px}
   img{max-width:86px;border-radius:8px}
   @page{size:A4;margin:12mm}`;
