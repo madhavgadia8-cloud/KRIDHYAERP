@@ -91,13 +91,23 @@
   .dr{display:flex;justify-content:space-between;padding:5px 0;font-size:13.5px}
   .dgrand{font-weight:800;font-size:16px;color:var(--plum);border-top:1px solid var(--line);margin-top:6px;padding-top:9px}
   .dwords{margin-top:12px;font-size:12.5px}
-  .dterms{margin-top:12px;border-color:#eee6f5!important}
+  .dtermsblock{margin-top:18px;padding-top:14px;border-top:1px dashed var(--line)}
+  .dtermstitle{font-size:11px;letter-spacing:1.6px;color:#8a7fa0;margin-bottom:8px}
+  .dterms{border-color:#eee6f5!important}
+  .dtermsprint,.prthead{display:none}
   .dsign{margin-top:22px;text-align:right;font-size:12.5px}
   @media print{
     .no-print,.side,.docbar{display:none!important}
     .docsheet{border:0;box-shadow:none;padding:0;max-width:100%}
     .docsheet input,.docsheet textarea,.docsheet select{border:0!important;padding:0!important;box-shadow:none!important;resize:none;background:transparent}
     .dtable th{background:#faf7f0!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    /* Terms & Conditions always start on a fresh page */
+    .dtermsblock{page-break-before:always;break-before:page;border-top:0;padding-top:0;margin-top:0}
+    .prthead{display:block;border-bottom:2px solid #c9a227;padding-bottom:8px;margin-bottom:16px}
+    .dtermstitle{font-size:13px;font-weight:700;color:#2e1f47;letter-spacing:1.6px;margin-bottom:10px}
+    .dterms{display:none!important}
+    .dtermsprint{display:block;white-space:pre-wrap;font-size:12.5px;line-height:1.75}
+    .dsign{page-break-inside:avoid}
   }
   @media(max-width:820px){.dhead{flex-direction:column}.dttl{text-align:left;min-width:0}.dnorow{justify-content:flex-start}.dgrid{grid-template-columns:1fr}.dto{border-right:0;padding-right:0}.dref{padding-left:0}}
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
@@ -736,7 +746,7 @@ views.docedit=function(){
     <button class="btn ghost" onclick="go('${d.back}')">← Back</button>
     <span class="hint" style="flex:1">${D._id?'Editing':'New'} ${d.title.toLowerCase()}</span>
     <button class="btn ghost" onclick="docWA()">📲 WhatsApp</button>
-    <button class="btn ghost" onclick="printDoc('${d.title}')">🖨️ Print / PDF</button>
+    <button class="btn ghost" onclick="docPrint()">🖨️ Print / PDF</button>
     <button class="btn gold" onclick="docSave()">💾 Save</button>
   </div>
   <datalist id="colOpts">${colList().map(c=>`<option>${esc(c)}</option>`).join('')}</datalist>
@@ -794,7 +804,14 @@ views.docedit=function(){
       <div class="dr dgrand"><span>Grand Total</span><span>${cur(T.total)}</span></div>
     </div>
     <div class="dwords"><b>Amount in words:</b> ${rupeesWords(T.total)}</div>
-    <textarea class="dterms" rows="2" placeholder="Terms &amp; Conditions" oninput="D.terms=this.value">${esc(D.terms||'')}</textarea>
+    <div class="dtermsblock">
+      <div class="prthead">
+        <div><b>${esc(co.name)}</b> <span class="hint">— ${d.title} ${esc(D.no)} · ${fmtDate(D.date)}</span></div>
+      </div>
+      <div class="dtermstitle">TERMS &amp; CONDITIONS</div>
+      <textarea class="dterms" rows="9" placeholder="Terms &amp; Conditions" oninput="D.terms=this.value;const p=document.querySelector('.dtermsprint');if(p)p.textContent=this.value">${esc(D.terms||'')}</textarea>
+      <div class="dtermsprint">${esc(D.terms||'')}</div>
+    </div>
     ${t==='inv'?`<div class="no-print" style="display:flex;gap:12px;margin-top:10px">
       <div class="fld"><label>Payment Status</label><select onchange="D.status=this.value">${['Paid','Partial','Unpaid'].map(s=>`<option ${s===D.status?'selected':''}>${s}</option>`).join('')}</select></div>
       <div class="fld"><label>Mode</label><select onchange="D.mode=this.value">${MODES.map(s=>`<option ${s===D.mode?'selected':''}>${s}</option>`).join('')}</select></div></div>`:''}
@@ -820,6 +837,55 @@ function docPickParty(id){const d=DOCT[D._type];const p=(d.side==='sup'?DB.suppl
   if(!p){D.partyId='';views.docedit();return;}
   D.partyId=p.id;D.partyName=p.name;D.partyAddr=[p.address,p.phone].filter(Boolean).join('\n');D.partyGstin=p.gstin||'';D.partyState=p.state||'';
   views.docedit();}
+/* proper print for the letterhead documents: keeps typed values + full styling */
+function docPrint(){
+  const src=document.getElementById('printArea');if(!src)return;
+  src.querySelectorAll('input').forEach(el=>el.setAttribute('data-pv',(el.type==='date'&&el.value)?fmtDate(el.value):el.value));
+  src.querySelectorAll('textarea').forEach(el=>el.setAttribute('data-pv',el.value));
+  src.querySelectorAll('select').forEach(el=>el.setAttribute('data-pv',el.options[el.selectedIndex]?el.options[el.selectedIndex].text:''));
+  const c=src.cloneNode(true);
+  c.querySelectorAll('.no-print,.dterms,datalist').forEach(e=>e.remove());
+  c.querySelectorAll('input,textarea,select').forEach(el=>{
+    const d=document.createElement('div');d.className='pv';d.textContent=el.getAttribute('data-pv')||'';el.replaceWith(d);});
+  const css=`*{box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,sans-serif;color:#2b2440;margin:0;padding:4px}
+  .pv{white-space:pre-wrap;min-height:1em}
+  .dhead{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;border-bottom:3px solid #c9a227;padding-bottom:14px}
+  .dconame{font-size:24px;font-weight:800;color:#3b2560;margin-top:6px;line-height:1.1}
+  .dcosub{font-size:11.5px;color:#6b6180;margin-top:2px}
+  .dttl{min-width:250px;text-align:right}
+  .dtitle{font-size:24px;font-weight:800;color:#c9a227;letter-spacing:.5px;margin-bottom:8px}
+  .dnorow{display:flex;justify-content:flex-end;align-items:baseline;gap:8px;font-size:12px;margin-bottom:4px}
+  .dnorow label{color:#6b6180}.dnorow .pv{font-weight:700}
+  .dgrid{display:grid;grid-template-columns:1fr 1fr;border-bottom:2px solid #c9a227}
+  .dto{padding:14px 18px 14px 0;border-right:1px solid #ececf3}
+  .dref{padding:14px 0 14px 18px}
+  .dlbl{font-size:10.5px;letter-spacing:1.4px;color:#8a7fa0;margin-bottom:6px}
+  .dto .pv{font-size:12.5px;margin-bottom:3px}.dto .pv:first-of-type{font-weight:700}
+  .drow2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .dinfo{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid #ececf3;font-size:12px}
+  .dinfo span{color:#8a7fa0}
+  .dintro{margin:14px 0;font-size:12.5px;line-height:1.5}
+  table.dtable{width:100%;border-collapse:collapse;margin-top:6px}
+  .dtable th{background:#faf7f0;border:1px solid #e6dcc8;padding:7px;font-size:11.5px;text-align:left;color:#4a3168;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .dtable td{border:1px solid #e9e3f2;padding:6px;font-size:12px;vertical-align:top}
+  .dtable td.num,.dtable th.num{text-align:right}
+  .dtot{margin-left:auto;max-width:330px;margin-top:12px;border-top:2px solid #c9a227;padding-top:8px}
+  .dr{display:flex;justify-content:space-between;padding:4px 0;font-size:13px}
+  .dgrand{font-weight:800;font-size:15px;color:#3b2560;border-top:1px solid #ececf3;margin-top:5px;padding-top:7px}
+  .dwords{margin-top:10px;font-size:12px}
+  .dtermsblock{page-break-before:always;break-before:page;margin:0;padding:0;border:0}
+  .prthead{display:block;border-bottom:2px solid #c9a227;padding-bottom:8px;margin-bottom:16px;font-size:13px}
+  .dtermstitle{font-size:12.5px;font-weight:700;letter-spacing:1.4px;color:#3b2560;margin-bottom:10px}
+  .dtermsprint{display:block;white-space:pre-wrap;font-size:12.5px;line-height:1.85}
+  .dsign{margin-top:30px;text-align:right;font-size:12px;page-break-inside:avoid}
+  .hint{color:#7a7390;font-size:11px}
+  img{max-width:86px;border-radius:8px}
+  @page{size:A4;margin:12mm}`;
+  const w=window.open('','','width=880,height=980');
+  w.document.write(`<html><head><title>${esc(DOCT[D._type].title)} ${esc(D.no)}</title><style>${css}</style></head><body>${c.innerHTML}</body></html>`);
+  w.document.close();w.focus();setTimeout(()=>w.print(),400);
+}
 function docWA(){const T=docTotals();const co=DB.company;
   const lines=D.items.filter(it=>it.desc).map(it=>`${it.desc} x${it.qty}${it.unit?' '+it.unit:''}`).join(', ');
   const phone=(D.partyAddr||'').match(/\d{10}/);
