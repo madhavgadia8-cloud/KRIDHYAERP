@@ -467,7 +467,10 @@ function autoLines(){
   });
   DB.expenses.forEach(e=>{const bm=bankMode(e.mode)||'Cash';add(e.date,e.category,'expense',e.amount,0,'EXP',e.note,e.category);add(e.date,bm,'asset',0,e.amount,'EXP',e.note,'Paid '+e.category);});
   (DB.adjustments||[]).forEach(adj=>{const v=Math.abs(adj.value);if(adj.value>=0){add(adj.date,'Inventory','asset',v,0,'ADJ',adj.note,'Stock added');add(adj.date,'Stock Adjustment','income',0,v,'ADJ',adj.note,'Stock gain');}else{add(adj.date,'Stock Adjustment','expense',v,0,'ADJ',adj.note,'Stock loss');add(adj.date,'Inventory','asset',0,v,'ADJ',adj.note,'Stock written off');}});
-  return J;
+  /* If a transaction already has its own journal entry (written by hand or generated),
+     don't post it automatically as well — that would count it twice. */
+  const done=new Set((DB.journals||[]).map(e=>e.src).filter(Boolean));
+  return done.size?J.filter(l=>!done.has((l.ref||'')+'|'+(l.date||''))):J;
 }
 function ledgerBalances(){const J=buildJournal();const m={};J.forEach(e=>{if(!m[e.acc])m[e.acc]={acc:e.acc,grp:e.grp,dr:0,cr:0};m[e.acc].dr+=e.dr;m[e.acc].cr+=e.cr;});return m;}
 function pnl(){const m=ledgerBalances();let income=0,expense=0;const inc=[],exp=[];Object.values(m).forEach(a=>{if(a.grp==='income'){const v=a.cr-a.dr;income+=v;inc.push({acc:a.acc,amt:v});}if(a.grp==='expense'){const v=a.dr-a.cr;expense+=v;exp.push({acc:a.acc,amt:v});}});return{inc,exp,income,expense,net:income-expense};}
@@ -1440,7 +1443,14 @@ function acctJournal(){
     <button class="btn ${manualMode()?'ghost':'gold'} sm" onclick="setAcctMode(false)">⚡ Automatic + manual</button>
     <span class="hint" style="flex:1;min-width:220px">${manualMode()?'Books show <b>only</b> the entries you write yourself.':'Invoices &amp; purchases post themselves, <b>plus</b> anything you write here.'}</span>
     <button class="btn ghost sm" onclick="autoDraftRun()">🪄 Generate entries from transactions${pend?' ('+pend+')':''}</button>
-  </div></div>
+  </div>
+  ${(()=>{const m=ledgerBalances();const td=Object.values(m).reduce((s,a)=>s+a.dr,0),tc=Object.values(m).reduce((s,a)=>s+a.cr,0);
+    const linked=(DB.journals||[]).filter(j=>j.src).length;
+    return `<div style="padding:0 18px 14px;font-size:12px;color:#6b6180">
+      ${Math.abs(td-tc)<1?'✅ Books balance — Debit '+cur(td)+' = Credit '+cur(tc):'⚠️ <b style="color:#c0392b">Out of balance</b> — Debit '+cur(td)+' vs Credit '+cur(tc)}
+      ${linked?` · ${linked} entr${linked===1?'y is':'ies are'} linked to a transaction, so that transaction is <b>not</b> posted again automatically.`:''}
+    </div>`;})()}
+  </div>
   ${manualMode()?`<div class="card" style="margin-bottom:14px;border-left:4px solid var(--gold)"><div style="padding:14px 18px"><b>Manual mode is ON.</b> <span class="hint">Invoices, purchases and expenses do <b>not</b> post automatically. Use <b>🪄 Generate entries</b> above to draft them from your transactions, then edit as you like.</span></div></div>`:''}
   <div class="card"><div class="panel-h"><h3>Journal Entries</h3><span class="hint">${list.length} entr${list.length===1?'y':'ies'}</span></div>
   <table><thead><tr><th>Date</th><th>No.</th><th>Narration</th><th>Accounts</th><th class="num">Amount</th><th></th></tr></thead><tbody>
