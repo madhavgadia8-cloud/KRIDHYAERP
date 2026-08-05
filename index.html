@@ -234,7 +234,9 @@ const INQ_STATUS=['New','Following up','Converted','Lost'];
 const INQ_SOURCES=['Walk-in','Instagram','WhatsApp','Facebook','Referral','Website','Other'];
 const HSN_DEFAULT='7117';
 
-function dateBack(d){const x=new Date();x.setDate(x.getDate()-d);return x.toISOString().slice(0,10);}
+/* local-date helper — toISOString() is UTC and shifts the date by a day in India */
+function isoLocal(dt){return new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10);}
+function dateBack(d){const x=new Date();x.setDate(x.getDate()-d);return isoLocal(x);}
 function seed(){
   const products=[
     {id:'p1',sku:'KRD-NK-001',name:'Kundan Bridal Necklace Set',category:'Bridal Set',material:'Kundan',hsn:'7117',cost:680,price:1499,stock:12,reorder:5},
@@ -1564,16 +1566,30 @@ function acctGST(){const g=gstReport();
 
 /* ============================ REPORTS ============================ */
 let repFrom='',repTo='';
+function repRange(k){const d=new Date(),y=d.getFullYear(),m=d.getMonth();
+  if(k==='month'){repFrom=isoLocal(new Date(y,m,1));repTo=isoLocal(d);}
+  else if(k==='last'){repFrom=isoLocal(new Date(y,m-1,1));repTo=isoLocal(new Date(y,m,0));}
+  else if(k==='fy'){const fy=m>=3?y:y-1;repFrom=fy+'-04-01';repTo=isoLocal(d);}   // Indian FY: 1 Apr → 31 Mar
+  else{const all=[].concat(DB.sales,DB.expenses,DB.purchases,(DB.journals||[]),(DB.returns||[])).map(x=>x.date).filter(Boolean).sort();
+    repFrom=all[0]||isoLocal(new Date(y,m,1));repTo=isoLocal(d);}
+  views.reports();}
 views.reports=function(){
-  if(!repFrom){const d=new Date();repFrom=new Date(d.getFullYear(),d.getMonth(),1).toISOString().slice(0,10);repTo=d.toISOString().slice(0,10);}
+  if(!repFrom){const d=new Date();repFrom=isoLocal(new Date(d.getFullYear(),d.getMonth(),1));repTo=isoLocal(d);}
   const inRange=dt=>dt>=repFrom&&dt<=repTo;
   const sales=DB.sales.filter(i=>inRange(i.date));
   const rets=(DB.returns||[]).filter(r=>inRange(r.date));
   const exps=DB.expenses.filter(e=>inRange(e.date));
   let taxable=0,gst=0,total=0,cogs=0;sales.forEach(i=>{const t=invTotals(i);taxable+=t.taxable;gst+=t.gst;total+=t.total;cogs+=invCOGS(i);});
   let rTotal=0,rTaxable=0;rets.forEach(r=>{const t=invTotals(r);rTotal+=t.total;rTaxable+=t.taxable;});
-  const netSales=taxable-rTaxable;const expTot=exps.reduce((s,e)=>s+e.amount,0);
-  const grossProfit=netSales-cogs;const netProfit=grossProfit-expTot;
+  const netSales=taxable-rTaxable;
+  /* expenses & other income come from the books, so Reports always agrees with Accounts —
+     this picks up hand-written journal entries as well as the Expenses page */
+  const jl=buildJournal().filter(l=>inRange(l.date));
+  const expTot=jl.filter(l=>l.grp==='expense'&&l.acc!=='Cost of Goods Sold').reduce((s,l)=>s+l.dr-l.cr,0);
+  const otherInc=jl.filter(l=>l.grp==='income'&&l.acc!=='Sales').reduce((s,l)=>s+l.cr-l.dr,0);
+  const expRows=Object.entries(jl.filter(l=>l.grp==='expense'&&l.acc!=='Cost of Goods Sold')
+    .reduce((m,l)=>{m[l.acc]=(m[l.acc]||0)+l.dr-l.cr;return m;},{})).sort((a,b)=>b[1]-a[1]);
+  const grossProfit=netSales-cogs;const netProfit=grossProfit+otherInc-expTot;
   let outG=0,inG=0;sales.forEach(i=>{outG+=invTotals(i).gst;});rets.forEach(r=>{outG-=invTotals(r).gst;});DB.purchases.filter(p=>(p.status==='Received'||p.status==='Paid')&&inRange(p.date)).forEach(p=>{inG+=poGst(p);});
   const prodAgg={};sales.forEach(i=>i.items.forEach(it=>{const a=prodAgg[it.productId]||(prodAgg[it.productId]={qty:0,rev:0});a.qty+=it.qty;a.rev+=it.qty*it.price-(+it.disc||0);}));
   const topP=Object.entries(prodAgg).sort((a,b)=>b[1].rev-a[1].rev).slice(0,5);
@@ -1583,11 +1599,18 @@ views.reports=function(){
   +`<div class="card" style="margin-bottom:18px"><div style="padding:14px 18px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
       <div class="fld" style="margin:0"><label>From</label><input type="date" value="${repFrom}" onchange="repFrom=this.value;views.reports()"></div>
       <div class="fld" style="margin:0"><label>To</label><input type="date" value="${repTo}" onchange="repTo=this.value;views.reports()"></div>
-      <div class="hint">${sales.length} invoice(s) · ${fmtDate(repFrom)} → ${fmtDate(repTo)}</div></div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn ghost sm" onclick="repRange('month')">This month</button>
+        <button class="btn ghost sm" onclick="repRange('last')">Last month</button>
+        <button class="btn ghost sm" onclick="repRange('fy')">This FY</button>
+        <button class="btn ghost sm" onclick="repRange('all')">All time</button>
+      </div>
+      <div class="hint">${sales.length} invoice(s) · ${jl.length} book entr${jl.length===1?'y':'ies'} · ${fmtDate(repFrom)} → ${fmtDate(repTo)}</div></div></div>
     <div class="grid kpis" style="margin-bottom:18px">
       <div class="card kpi b1"><div class="lbl">Net Sales (taxable)</div><div class="val">${cur0(netSales)}</div><div class="meta">${cur0(total)} incl GST</div></div>
       <div class="card kpi b3"><div class="lbl">Gross Profit</div><div class="val">${cur0(grossProfit)}</div><div class="meta">COGS ${cur0(cogs)}</div></div>
-      <div class="card kpi b6"><div class="lbl">Expenses</div><div class="val">${cur0(expTot)}</div></div>
+      <div class="card kpi b6"><div class="lbl">Expenses</div><div class="val">${cur0(expTot)}</div><div class="meta">from your books</div></div>
+      ${otherInc?`<div class="card kpi b3"><div class="lbl">Other Income</div><div class="val">${cur0(otherInc)}</div></div>`:''}
       <div class="card kpi ${netProfit>=0?'b3':'b4'}"><div class="lbl">Net Profit</div><div class="val">${cur0(netProfit)}</div></div>
       <div class="card kpi b2"><div class="lbl">Net GST Payable</div><div class="val">${cur0(outG-inG)}</div><div class="meta">out ${cur0(outG)} − in ${cur0(inG)}</div></div>
       <div class="card kpi b4"><div class="lbl">Returns</div><div class="val">${cur0(rTotal)}</div><div class="meta">${rets.length} credit note(s)</div></div>
@@ -1595,6 +1618,12 @@ views.reports=function(){
     <div class="two-col">
       <div class="card"><div class="panel-h"><h3>⭐ Top Products</h3></div>${topP.length?`<table><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead><tbody>${topP.map(([pid,a])=>`<tr><td>${esc(prod(pid).name)}</td><td class="num">${a.qty}</td><td class="num">${cur(a.rev)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No sales in this range.</div>'}</div>
       <div class="card"><div class="panel-h"><h3>👑 Top Customers</h3></div>${topC.length?`<table><thead><tr><th>Customer</th><th class="num">Orders</th><th class="num">Spent</th></tr></thead><tbody>${topC.map(([cid,a])=>`<tr><td>${esc(cust(cid).name)}</td><td class="num">${a.n}</td><td class="num">${cur(a.rev)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No sales in this range.</div>'}</div>
+    </div>
+    <div class="card" style="margin-top:18px"><div class="panel-h"><h3>💸 Where the money went</h3><span class="hint">${fmtDate(repFrom)} → ${fmtDate(repTo)}</span></div>
+      ${expRows.length?`<table><thead><tr><th>Account</th><th class="num">Amount</th><th class="num">% of spend</th></tr></thead><tbody>
+      ${expRows.map(([acc,v])=>`<tr><td>${esc(acc)}</td><td class="num"><b>${cur(v)}</b></td><td class="num">${expTot?Math.round(v/expTot*100):0}%</td></tr>`).join('')}
+      </tbody><tfoot><tr><td>Total</td><td class="num"><b>${cur(expTot)}</b></td><td></td></tr></tfoot></table>`
+      :'<div class="empty">No expenses recorded in this range. Add them on the Expenses page or as a Journal Entry in Books.</div>'}
     </div>`;
 };
 
