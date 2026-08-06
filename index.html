@@ -756,8 +756,7 @@ views.docedit=function(){
   if(!D){go('dashboard');return;}
   const t=D._type,d=DOCT[t],co=DB.company,T=docTotals();
   const people=d.side==='sup'?DB.suppliers:DB.customers;
-  const gstRows=T.inter?`<div class="dr"><span>IGST @ ${D.gstRate}%</span><span>${cur(T.igst)}</span></div>`
-    :`<div class="dr"><span>CGST @ ${D.gstRate/2}%</span><span>${cur(T.cgst)}</span></div><div class="dr"><span>SGST @ ${D.gstRate/2}%</span><span>${cur(T.sgst)}</span></div>`;
+  const gstRows=`<div class="dr" data-row="cgst" ${T.inter?'style="display:none"':''}><span data-l="cgst">CGST @ ${D.gstRate/2}%</span><span data-t="cgst">${cur(T.cgst)}</span></div><div class="dr" data-row="sgst" ${T.inter?'style="display:none"':''}><span data-l="sgst">SGST @ ${D.gstRate/2}%</span><span data-t="sgst">${cur(T.sgst)}</span></div><div class="dr" data-row="igst" ${T.inter?'':'style="display:none"'}><span data-l="igst">IGST @ ${D.gstRate}%</span><span data-t="igst">${cur(T.igst)}</span></div>`;
   $('#main').innerHTML=`
   <div class="docbar no-print">
     <button class="btn ghost" onclick="go('${d.back}')">← Back</button>
