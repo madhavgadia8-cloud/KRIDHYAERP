@@ -651,7 +651,7 @@ function renderLines(){$('#i_lines').innerHTML=draft.items.map((it,idx)=>{const 
     <td class="num"><b>${cur(it.qty*it.price-(+it.disc||0))}</b></td>
     <td class="num"><span class="pill ${mg>0?'green':mg<0?'red':'grey'}">${mg}%</span></td>
     <td><button class="ico-btn" onclick="rmLine(${idx})">✕</button></td></tr>`;}).join('');renderSum();}
-function renderSum(){const t=invTotals(draft);const cid=$('#i_cust')?$('#i_cust').value:draft.customerId;const inter=isInterState(DB.company.state,cust(cid).state);const gstRows=inter?`<div class="r"><span>IGST (${draft.gstRate||0}%)</span><span>${cur(t.gst)}</span></div>`:`<div class="r"><span>CGST (${(draft.gstRate||0)/2}%)</span><span>${cur(t.gst/2)}</span></div><div class="r"><span>SGST (${(draft.gstRate||0)/2}%)</span><span>${cur(t.gst/2)}</span></div>`;
+function renderSum(){const t=invTotals(draft);const cid=$('#i_cust')?$('#i_cust').value:draft.customerId;const inter=isInterState(DB.company.state,cust(cid).state);const gstRows=`<div class="dr" data-row="cgst" ${T.inter?'style="display:none"':''}><span data-l="cgst">CGST @ ${D.gstRate/2}%</span><span data-t="cgst">${cur(T.cgst)}</span></div><div class="dr" data-row="sgst" ${T.inter?'style="display:none"':''}><span data-l="sgst">SGST @ ${D.gstRate/2}%</span><span data-t="sgst">${cur(T.sgst)}</span></div><div class="dr" data-row="igst" ${T.inter?'':'style="display:none"'}><span data-l="igst">IGST @ ${D.gstRate}%</span><span data-t="igst">${cur(T.igst)}</span></div>`;
   $('#i_sum').innerHTML=`<div class="r"><span>Subtotal</span><span>${cur(t.sub)}</span></div><div class="r"><span>Discount</span><span>− ${cur(t.disc)}</span></div>${gstRows}<div class="r total"><span>Total</span><span>${cur(t.total)}</span></div>`;}
 function addLine(){draft.items.push({productId:DB.products[0].id,qty:1,price:DB.products[0].price,disc:0});renderLines();}
 function rmLine(i){draft.items.splice(i,1);if(!draft.items.length)addLine();else renderLines();}
@@ -787,7 +787,7 @@ views.docedit=function(){
         <input class="dbig" placeholder="${d.side==='sup'?'Supplier':'Customer'} name" value="${esc(D.partyName||'')}" oninput="D.partyName=this.value">
         <textarea rows="3" placeholder="Address / contact" oninput="D.partyAddr=this.value">${esc(D.partyAddr||'')}</textarea>
         <div class="drow2"><input placeholder="GSTIN" value="${esc(D.partyGstin||'')}" oninput="D.partyGstin=this.value">
-        <input placeholder="State" value="${esc(D.partyState||'')}" oninput="D.partyState=this.value;views.docedit()"></div>
+        <input placeholder="State" value="${esc(D.partyState||'')}" oninput="D.partyState=this.value;docRefreshTotals()"></div>
       </div>
       <div class="dref"><div class="dlbl">REFERENCE</div>
         <input placeholder="Reference / your quotation" value="${esc(D.ref||'')}" oninput="D.ref=this.value">
@@ -813,12 +813,12 @@ views.docedit=function(){
     </tbody></table>
     <button class="btn ghost sm no-print" style="margin-top:8px" onclick="D.items.push(blankItem());views.docedit()">+ Add item</button>
     <div class="dtot">
-      <div class="dr"><span>Sub Total</span><span>${cur(T.sub)}</span></div>
-      ${T.disc?`<div class="dr"><span>Discount</span><span>− ${cur(T.disc)}</span></div>`:''}
-      <div class="dr"><span>Taxable Value</span><span>${cur(T.taxable)}</span></div>
-      <div class="dr no-print"><span>GST %</span><span><input type="number" style="width:70px;text-align:right" value="${D.gstRate}" oninput="D.gstRate=+this.value||0;views.docedit()"></span></div>
+      <div class="dr"><span>Sub Total</span><span data-t="sub">${cur(T.sub)}</span></div>
+      <div class="dr" data-row="disc" ${T.disc?'':'style="display:none"'}><span>Discount</span><span data-t="disc">− ${cur(T.disc)}</span></div>
+      <div class="dr"><span>Taxable Value</span><span data-t="taxable">${cur(T.taxable)}</span></div>
+      <div class="dr no-print"><span>GST %</span><span><input type="number" style="width:70px;text-align:right" value="${D.gstRate}" oninput="D.gstRate=+this.value||0;docRefreshTotals()"></span></div>
       ${gstRows}
-      <div class="dr dgrand"><span>Grand Total</span><span>${cur(T.total)}</span></div>
+      <div class="dr dgrand"><span>Grand Total</span><span data-t="total">${cur(T.total)}</span></div>
     </div>
     <div class="dwords"><b>Amount in words:</b> ${rupeesWords(T.total)}</div>
     <div class="dtermsblock">
@@ -850,11 +850,19 @@ function docSet(i,k,v){const it=D.items[i];
   if(k==='rate')docSetRate(it,v); else it[k]=+v||0;
   const tr=$('.dtable tbody').children[i];if(tr)tr.children[8].innerHTML='<b>'+cur(docAmt(it))+'</b>';
   docRefreshTotals();}
-function docRefreshTotals(){const T=docTotals();const box=$('.dtot');if(!box)return;
-  const rows=box.querySelectorAll('.dr');
-  if(rows[0])rows[0].lastElementChild.textContent=cur(T.sub);
-  const g=box.querySelector('.dgrand');if(g)g.lastElementChild.textContent=cur(T.total);
-  const w=$('.dwords');if(w)w.innerHTML='<b>Amount in words:</b> '+rupeesWords(T.total);}
+function docRefreshTotals(){
+  const T=docTotals();const box=$(".dtot");if(!box)return;
+  const set=(k,v)=>{const el=box.querySelector('[data-t="'+k+'"]');if(el)el.textContent=v;};
+  const row=(k,show)=>{const el=box.querySelector('[data-row="'+k+'"]');if(el)el.style.display=show?"":"none";};
+  const lbl=(k,v)=>{const el=box.querySelector('[data-l="'+k+'"]');if(el)el.textContent=v;};
+  set("sub",cur(T.sub));
+  set("disc","− "+cur(T.disc)); row("disc",T.disc>0);
+  set("taxable",cur(T.taxable));
+  set("cgst",cur(T.cgst)); set("sgst",cur(T.sgst)); set("igst",cur(T.igst));
+  lbl("cgst","CGST @ "+(D.gstRate/2)+"%"); lbl("sgst","SGST @ "+(D.gstRate/2)+"%"); lbl("igst","IGST @ "+D.gstRate+"%");
+  row("cgst",!T.inter); row("sgst",!T.inter); row("igst",T.inter);
+  set("total",cur(T.total));
+  const w=$(".dwords");if(w)w.innerHTML="<b>Amount in words:</b> "+rupeesWords(T.total);}
 function docPickProd(i,pid){const it=D.items[i];it.productId=pid;
   if(pid){const p=prod(pid);it.desc=p.name+(p.material?' — '+p.material:'');
     if(p.colour)it.colour=p.colour;
