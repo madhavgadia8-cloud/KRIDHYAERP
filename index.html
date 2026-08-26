@@ -467,7 +467,15 @@ function autoLines(){
     if(paid>0)add(p.date,bm,'asset',0,paid,p.no,party,'Payment to supplier');
     if(credit>0.005)add(p.date,'Accounts Payable','liability',0,credit,p.no,party,'Credit purchase');
   });
-  DB.expenses.forEach(e=>{const bm=bankMode(e.mode)||'Cash';add(e.date,e.category,'expense',e.amount,0,'EXP',e.note,e.category);add(e.date,bm,'asset',0,e.amount,'EXP',e.note,'Paid '+e.category);});
+  DB.expenses.forEach(e=>{const bm=bankMode(e.mode)||'Cash';const r=+e.gstRate||0;
+    if(r>0&&e.itc!==false){const taxable=e.amount/(1+r/100), gst=e.amount-taxable;
+      const inter=isInterState(DB.company.state,e.state||DB.company.state);
+      add(e.date,e.category,'expense',taxable,0,'EXP',e.note,e.category);
+      if(inter)add(e.date,'Input IGST','asset',gst,0,'EXP',e.note,'GST input on expense');
+      else{add(e.date,'Input CGST','asset',gst/2,0,'EXP',e.note,'GST input');add(e.date,'Input SGST','asset',gst/2,0,'EXP',e.note,'GST input');}
+      add(e.date,bm,'asset',0,e.amount,'EXP',e.note,'Paid '+e.category);
+    }else{add(e.date,e.category,'expense',e.amount,0,'EXP',e.note,e.category);
+      add(e.date,bm,'asset',0,e.amount,'EXP',e.note,'Paid '+e.category);}});
   (DB.adjustments||[]).forEach(adj=>{const v=Math.abs(adj.value);if(adj.value>=0){add(adj.date,'Inventory','asset',v,0,'ADJ',adj.note,'Stock added');add(adj.date,'Stock Adjustment','income',0,v,'ADJ',adj.note,'Stock gain');}else{add(adj.date,'Stock Adjustment','expense',v,0,'ADJ',adj.note,'Stock loss');add(adj.date,'Inventory','asset',0,v,'ADJ',adj.note,'Stock written off');}});
   /* If a transaction already has its own journal entry (written by hand or generated),
      don't post it automatically as well — that would count it twice. */
@@ -477,7 +485,18 @@ function autoLines(){
 function ledgerBalances(){const J=buildJournal();const m={};J.forEach(e=>{if(!m[e.acc])m[e.acc]={acc:e.acc,grp:e.grp,dr:0,cr:0};m[e.acc].dr+=e.dr;m[e.acc].cr+=e.cr;});return m;}
 function pnl(){const m=ledgerBalances();let income=0,expense=0;const inc=[],exp=[];Object.values(m).forEach(a=>{if(a.grp==='income'){const v=a.cr-a.dr;income+=v;inc.push({acc:a.acc,amt:v});}if(a.grp==='expense'){const v=a.dr-a.cr;expense+=v;exp.push({acc:a.acc,amt:v});}});return{inc,exp,income,expense,net:income-expense};}
 function balanceSheet(){const m=ledgerBalances();const assets=[],liab=[];let ta=0,tl=0;Object.values(m).forEach(a=>{if(a.grp==='asset'){const v=a.dr-a.cr;ta+=v;assets.push({acc:a.acc,amt:v});}if(a.grp==='liability'){const v=a.cr-a.dr;tl+=v;liab.push({acc:a.acc,amt:v});}if(a.grp==='equity'){const v=a.cr-a.dr;tl+=v;liab.push({acc:a.acc,amt:v});}});const np=pnl().net;liab.push({acc:'Net Profit (current period)',amt:np});tl+=np;return{assets,liab,ta,tl};}
-function gstReport(){let oc=0,os=0,oi=0,ic=0,is=0,ii=0;DB.sales.forEach(i=>{const sp=gstSplit(i);oc+=sp.cgst;os+=sp.sgst;oi+=sp.igst;});(DB.returns||[]).forEach(r=>{const sp=gstSplit(r);oc-=sp.cgst;os-=sp.sgst;oi-=sp.igst;});DB.purchases.filter(p=>p.status==='Received'||p.status==='Paid').forEach(p=>{const sp=poSplit(p);ic+=sp.cgst;is+=sp.sgst;ii+=sp.igst;});const output=oc+os+oi,input=ic+is+ii;return{oc,os,oi,ic,is,ii,output,input,net:output-input};}
+function gstReport(){let oc=0,os=0,oi=0,ic=0,is=0,ii=0,ie=0;
+  DB.sales.forEach(i=>{const sp=gstSplit(i);oc+=sp.cgst;os+=sp.sgst;oi+=sp.igst;});
+  (DB.returns||[]).forEach(r=>{const sp=gstSplit(r);oc-=sp.cgst;os-=sp.sgst;oi-=sp.igst;});
+  DB.purchases.filter(p=>p.status==='Received'||p.status==='Paid').forEach(p=>{const sp=poSplit(p);ic+=sp.cgst;is+=sp.sgst;ii+=sp.igst;});
+  const doneRefs=new Set((DB.journals||[]).map(j=>j.src).filter(Boolean));
+  DB.expenses.forEach(e=>{if(doneRefs.has('EXP|'+e.date))return;const r=+e.gstRate||0;if(r>0&&e.itc!==false){
+    const gst=e.amount-e.amount/(1+r/100);ie+=gst;
+    if(isInterState(DB.company.state,e.state||DB.company.state))ii+=gst;else{ic+=gst/2;is+=gst/2;}}});
+  manualLines().forEach(l=>{const d=l.dr-l.cr;
+    if(l.acc==='Input CGST')ic+=d;else if(l.acc==='Input SGST')is+=d;else if(l.acc==='Input IGST')ii+=d;
+    else if(l.acc==='Output CGST')oc+=l.cr-l.dr;else if(l.acc==='Output SGST')os+=l.cr-l.dr;else if(l.acc==='Output IGST')oi+=l.cr-l.dr;});
+  const output=oc+os+oi,input=ic+is+ii;return{oc,os,oi,ic,is,ii,ie,output,input,net:output-input};}
 
 /* ============================ ROUTER ============================ */
 const views={};
@@ -529,12 +548,39 @@ views.dashboard=function(){
 };
 
 /* ============================ INVENTORY ============================ */
+let invTab='items';
+function stockSummary(){const groups={};
+  DB.products.forEach(p=>{const g=p.category||'Ungrouped';
+    (groups[g]=groups[g]||{items:[],qty:0,costVal:0,saleVal:0});
+    groups[g].items.push(p);groups[g].qty+=p.stock;
+    groups[g].costVal+=p.stock*p.cost;groups[g].saleVal+=p.stock*p.price;});
+  return groups;}
+function renderStockSummary(){
+  const G=stockSummary();const names=Object.keys(G).sort();
+  let tq=0,tc=0,ts=0;names.forEach(n=>{tq+=G[n].qty;tc+=G[n].costVal;ts+=G[n].saleVal;});
+  window._sgOpen=window._sgOpen||{};
+  $('#invBody').innerHTML=`<div class="card"><div class="panel-h"><h3>Stock Summary — by Group</h3><span class="hint">${DB.products.length} items in ${names.length} group(s)</span></div>
+  <table><thead><tr><th>Stock Group / Item</th><th class="num">Qty</th><th class="num">Avg Cost</th><th class="num">Value (at cost)</th><th class="num">Value (at price)</th></tr></thead><tbody>
+  ${names.map(n=>{const g=G[n];const open=window._sgOpen[n]!==false;
+    return `<tr style="background:#faf8fc;cursor:pointer" onclick="_sgOpen['${esc(n)}']=${open?'false':'true'};renderStockSummary()">
+      <td><b>${open?'▾':'▸'} ${esc(n)}</b> <span class="hint">(${g.items.length} item${g.items.length===1?'':'s'})</span></td>
+      <td class="num"><b>${g.qty}</b></td><td class="num"></td>
+      <td class="num"><b>${cur(g.costVal)}</b></td><td class="num"><b>${cur(g.saleVal)}</b></td></tr>`
+    +(open?g.items.map(p=>`<tr><td style="padding-left:34px">${esc(p.name)}<br><span class="hint">${esc(p.sku)}${p.colour?' · '+esc(p.colour):''}</span></td>
+      <td class="num"><span class="pill ${p.stock===0?'red':p.stock<=p.reorder?'amber':'blue'}">${p.stock}</span></td>
+      <td class="num">${cur(p.cost)}</td><td class="num">${cur(p.stock*p.cost)}</td><td class="num">${cur(p.stock*p.price)}</td></tr>`).join(''):'');
+  }).join('')}
+  </tbody><tfoot><tr><td><b>Total</b></td><td class="num"><b>${tq}</b></td><td></td><td class="num"><b>${cur(tc)}</b></td><td class="num"><b>${cur(ts)}</b></td></tr></tfoot></table>
+  <p class="hint" style="padding:0 18px 14px;margin:6px 0 0">Groups come from each product's <b>Category</b>. Click a group to expand or collapse.</p></div>`;}
 views.inventory=function(){render();
   function render(filter=''){const f=filter.toLowerCase();
     const list=DB.products.filter(p=>!f||p.name.toLowerCase().includes(f)||p.sku.toLowerCase().includes(f)||p.category.toLowerCase().includes(f));
+    if(invTab==='summary'){$('#main').innerHTML=header('Inventory','Manage your jewellery catalogue &amp; stock',`<button class="btn gold" onclick="editProduct()">+ Add Product</button>`)
+      +`<div class="tabs"><button onclick="invTab='items';views.inventory()">📋 Items</button><button class="on">📊 Stock Summary</button></div><div id="invBody"></div>`;
+      renderStockSummary();return;}
     $('#main').innerHTML=header('Inventory','Manage your jewellery catalogue &amp; stock',
       `<input class="search" id="invSearch" placeholder="Search name / SKU / category…" value="${esc(filter)}"><button class="btn gold" onclick="editProduct()">+ Add Product</button>`)
-    +`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th class="num">Stock</th><th></th></tr></thead>
+    +`<div class="tabs"><button class="on">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button></div>`+`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th class="num">Stock</th><th></th></tr></thead>
       <tbody>${list.length?list.map(p=>{const m=p.price-p.cost;const mp=p.cost?Math.round(m/p.cost*100):0;const lf=p.stock<=p.reorder;
         return `<tr><td><span class="hint">${esc(p.sku)}</span></td><td><div style="display:flex;align-items:center;gap:9px">${p.image?`<img src="${p.image}" style="width:38px;height:38px;object-fit:cover;border-radius:7px;border:1px solid var(--line)">`:`<div style="width:38px;height:38px;border-radius:7px;background:#f0eaf7;display:flex;align-items:center;justify-content:center">💍</div>`}<div><b>${esc(p.name)}</b><br><span class="hint">${esc(p.material)}</span></div></div></td><td><span class="tag-cat">${esc(p.category)}</span></td><td>${esc(p.hsn)}</td><td class="num">${cur(p.cost)}</td><td class="num"><b>${cur(p.price)}</b></td><td class="num"><span class="pill ${m>0?'green':'grey'}">${mp}%</span></td><td class="num"><span class="pill ${p.stock===0?'red':lf?'amber':'blue'}">${p.stock}</span></td>
         <td><div class="row-actions"><button class="ico-btn" title="Adjust stock" onclick="adjustStock('${p.id}')">📥</button><button class="ico-btn" title="Edit" onclick="editProduct('${p.id}')">✏️</button><button class="ico-btn" title="Delete" onclick="delProduct('${p.id}')">🗑️</button></div></td></tr>`;
@@ -1407,10 +1453,24 @@ views.expenses=function(){const list=[...DB.expenses].sort((a,b)=>b.date.localeC
 function editExpense(id){const e=id?DB.expenses.find(x=>x.id===id):{date:new Date().toISOString().slice(0,10),category:EXP_CATS[0],amount:'',mode:'Cash',note:''};
   openModal(`<div class="modal-h"><h3>${id?'Edit':'Add'} Expense</h3><button class="x" onclick="closeModal()">×</button></div>
     <div class="modal-b"><div class="fld-row"><div class="fld"><label>Date</label><input id="e_date" type="date" value="${e.date}"></div><div class="fld"><label>Category</label><select id="e_cat">${EXP_CATS.map(c=>`<option ${c===e.category?'selected':''}>${c}</option>`).join('')}</select></div></div>
-      <div class="fld-row"><div class="fld"><label>Amount (₹)</label><input id="e_amt" type="number" value="${e.amount}"></div><div class="fld"><label>Paid via</label><select id="e_mode">${['Cash','Bank','UPI'].map(m=>`<option ${m===e.mode?'selected':''}>${m}</option>`).join('')}</select></div></div>
+      <div class="fld-row"><div class="fld"><label>Amount (₹) <span class="hint">total paid, incl GST</span></label><input id="e_amt" type="number" value="${e.amount}" oninput="expGstCalc()"></div><div class="fld"><label>Paid via</label><select id="e_mode">${['Cash','Bank','UPI'].map(m=>`<option ${m===e.mode?'selected':''}>${m}</option>`).join('')}</select></div></div>
+      <div class="fld-row3"><div class="fld"><label>GST %</label><select id="e_gst" onchange="expGstCalc()">${[0,3,5,12,18,28].map(r=>`<option value="${r}" ${(+e.gstRate||0)===r?'selected':''}>${r}%</option>`).join('')}</select></div>
+        <div class="fld"><label>Supplier State</label><input id="e_state" value="${esc(e.state||DB.company.state||'')}" oninput="expGstCalc()"><div class="hint">same state = CGST+SGST</div></div>
+        <div class="fld"><label>GST amount</label><input id="e_gstamt" readonly style="background:#faf8fc"></div></div>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:4px 0 10px"><input type="checkbox" id="e_itc" ${e.itc===false?'':'checked'} style="margin-top:3px">
+        <span><b>Claim this GST as input credit</b><br><span class="hint">Untick where credit isn't allowed. It still shows as expense — just not claimed.</span></span></label>
       <div class="fld"><label>Note</label><input id="e_note" value="${esc(e.note||'')}" placeholder="details"></div></div>
     <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveExpense('${id||''}')">Save</button></div>`);}
-function saveExpense(id){const o={date:$('#e_date').value,category:$('#e_cat').value,amount:+$('#e_amt').value||0,mode:$('#e_mode').value,note:$('#e_note').value.trim()};
+function expGstCalc(){
+  const amt=+($('#e_amt')||{}).value||0, r=+($('#e_gst')||{}).value||0;
+  const el=$('#e_gstamt');if(!el)return;
+  if(!r||!amt){el.value='—';return;}
+  const gst=amt-amt/(1+r/100);
+  const inter=isInterState(DB.company.state,($('#e_state')||{}).value||DB.company.state);
+  el.value=cur(gst)+(inter?' (IGST)':' (CGST+SGST)');
+}
+function saveExpense(id){const o={date:$('#e_date').value,category:$('#e_cat').value,amount:+$('#e_amt').value||0,mode:$('#e_mode').value,note:$('#e_note').value.trim(),
+  gstRate:+($('#e_gst')||{}).value||0,state:(($('#e_state')||{}).value||'').trim(),itc:!!($('#e_itc')||{}).checked};
   if(!o.amount){toast('Enter an amount');return;}
   if(id)Object.assign(DB.expenses.find(x=>x.id===id),o);else{o.id=uid('e');DB.expenses.push(o);}
   save();closeModal();views.expenses();toast('Expense saved');}
@@ -1442,8 +1502,12 @@ function autoDraftRun(){
     save();toast(pend.length+' entries created');views.accounting();
   });
 }
+const VTYPES=['Journal','Payment','Receipt','Contra','Sales','Purchase','Credit Note','Debit Note'];
+const VCOL={Journal:'blue',Payment:'red',Receipt:'green',Contra:'amber',Sales:'green',Purchase:'blue','Credit Note':'red','Debit Note':'amber'};
+let _jvFilter='All';
 function acctJournal(){
-  const list=(DB.journals||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  let list=(DB.journals||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  if(_jvFilter!=='All')list=list.filter(e=>(e.vtype||'Journal')===_jvFilter);
   const pend=autoDraftPending().length;
   $('#acctBody').innerHTML=`
   <div class="card" style="margin-bottom:14px"><div style="padding:14px 18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -1461,13 +1525,15 @@ function acctJournal(){
     </div>`;})()}
   </div>
   ${manualMode()?`<div class="card" style="margin-bottom:14px;border-left:4px solid var(--gold)"><div style="padding:14px 18px"><b>Manual mode is ON.</b> <span class="hint">Invoices, purchases and expenses do <b>not</b> post automatically. Use <b>🪄 Generate entries</b> above to draft them from your transactions, then edit as you like.</span></div></div>`:''}
-  <div class="card"><div class="panel-h"><h3>Journal Entries</h3><span class="hint">${list.length} entr${list.length===1?'y':'ies'}</span></div>
-  <table><thead><tr><th>Date</th><th>No.</th><th>Narration</th><th>Accounts</th><th class="num">Amount</th><th></th></tr></thead><tbody>
-  ${list.length?list.map(e=>{const t=jvTotals(e);return `<tr><td>${fmtDate(e.date)}</td><td><span class="hint">${esc(e.no||'')}</span></td><td>${esc(e.narr||'')}${e.party?`<br><span class="hint">${esc(e.party)}</span>`:''}</td>
+  <div class="card"><div class="panel-h"><h3>Vouchers</h3>
+    <select class="search" style="max-width:170px" onchange="_jvFilter=this.value;acctJournal()">${['All'].concat(VTYPES).map(v=>`<option ${v===_jvFilter?'selected':''}>${v}</option>`).join('')}</select>
+    <span class="hint">${list.length} voucher${list.length===1?'':'s'}</span></div>
+  <table><thead><tr><th>Date</th><th>No.</th><th>Type</th><th>Narration</th><th>Accounts</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+  ${list.length?list.map(e=>{const t=jvTotals(e);const vt=e.vtype||'Journal';return `<tr><td>${fmtDate(e.date)}</td><td><span class="hint">${esc(e.no||'')}</span></td><td><span class="pill ${VCOL[vt]||'blue'}">${esc(vt)}</span></td><td>${esc(e.narr||'')}${e.party?`<br><span class="hint">${esc(e.party)}</span>`:''}</td>
     <td><span class="hint">${(e.lines||[]).map(l=>`${esc(l.acc)} ${(+l.dr||0)?'Dr':'Cr'}`).join(' · ')}</span></td>
     <td class="num"><b>${cur(t.dr)}</b></td>
     <td style="text-align:right;white-space:nowrap"><button class="btn ghost sm" onclick="jvModal('${e.id}')">Edit</button> <button class="btn ghost sm" onclick="jvDel('${e.id}')">Delete</button></td></tr>`;}).join('')
-    :`<tr><td colspan="6"><div class="empty">No entries yet. Click <b>+ New Entry</b> to record your first one.</div></td></tr>`}
+    :`<tr><td colspan="7"><div class="empty">No vouchers yet. Click <b>+ New Entry</b> to record your first one.</div></td></tr>`}
   </tbody></table></div>`;
 }
 function jvModal(id){
@@ -1477,7 +1543,8 @@ function jvModal(id){
   <div class="modal-b">
     <div class="fld-row3"><div class="fld"><label>Date</label><input id="jv_date" type="date" value="${e.date||dateBack(0)}"></div>
     <div class="fld"><label>Entry No.</label><input id="jv_no" value="${esc(e.no||('JV-'+((DB.journals||[]).length+1)))}"></div>
-    <div class="fld"><label>Party / Reference <span class="hint">(optional)</span></label><input id="jv_party" value="${esc(e.party||'')}" placeholder="e.g. Sharma Traders"></div></div>
+    <div class="fld"><label>Voucher Type</label><select id="jv_type">${VTYPES.map(v=>`<option ${v===(e.vtype||'Journal')?'selected':''}>${v}</option>`).join('')}</select></div></div>
+    <div class="fld"><label>Party / Reference <span class="hint">(optional)</span></label><input id="jv_party" value="${esc(e.party||'')}" placeholder="e.g. Sharma Traders"></div>
     <div class="fld"><label>Narration</label><input id="jv_narr" value="${esc(e.narr||'')}" placeholder="e.g. Shop rent paid for July"></div>
     <div id="jvLines"></div>
     <button class="btn ghost sm" style="margin-top:8px" onclick="jvAddLine()">+ Add line</button>
@@ -1510,7 +1577,7 @@ function jvSave(id){
   const d=lines.reduce((s,l)=>s+l.dr,0), c=lines.reduce((s,l)=>s+l.cr,0);
   if(Math.abs(d-c)>0.01){toast('Debit and Credit must be equal — difference '+cur(Math.abs(d-c)));return;}
   DB.journals=DB.journals||[];
-  const rec={id:id||uid('jv'),no:$('#jv_no').value.trim(),date:$('#jv_date').value,narr:$('#jv_narr').value.trim(),party:$('#jv_party').value.trim(),lines};
+  const rec={id:id||uid('jv'),no:$('#jv_no').value.trim(),date:$('#jv_date').value,narr:$('#jv_narr').value.trim(),party:$('#jv_party').value.trim(),vtype:($('#jv_type')||{}).value||'Journal',lines};
   const ex=DB.journals.find(x=>x.id===id);
   if(ex)Object.assign(ex,rec);else DB.journals.push(rec);
   save();closeModal();toast('Entry saved');views.accounting();
@@ -1568,7 +1635,7 @@ function acctGST(){const g=gstReport();
     <div class="card"><div class="panel-h"><h3>Output GST (on Sales)</h3></div><div style="padding:6px 0">
       <div class="mini-list"><div class="it"><span>CGST collected</span><b>${cur(g.oc)}</b></div><div class="it"><span>SGST collected</span><b>${cur(g.os)}</b></div><div class="it"><span>IGST collected</span><b>${cur(g.oi)}</b></div><div class="it" style="background:#faf8fc"><span><b>Total Output</b></span><b>${cur(g.output)}</b></div></div></div></div>
     <div class="card"><div class="panel-h"><h3>Input GST (on Purchases)</h3></div><div style="padding:6px 0">
-      <div class="mini-list"><div class="it"><span>CGST paid</span><b>${cur(g.ic)}</b></div><div class="it"><span>SGST paid</span><b>${cur(g.is)}</b></div><div class="it"><span>IGST paid</span><b>${cur(g.ii)}</b></div><div class="it" style="background:#faf8fc"><span><b>Total Input Credit</b></span><b>${cur(g.input)}</b></div></div></div></div></div>
+      <div class="mini-list"><div class="it"><span>CGST paid</span><b>${cur(g.ic)}</b></div><div class="it"><span>SGST paid</span><b>${cur(g.is)}</b></div><div class="it"><span>IGST paid</span><b>${cur(g.ii)}</b></div>${g.ie?`<div class="it"><span class="hint">↳ includes GST on expenses (claimed)</span><span class="hint">${cur(g.ie)}</span></div>`:''}<div class="it" style="background:#faf8fc"><span><b>Total Input Credit</b></span><b>${cur(g.input)}</b></div></div></div></div></div>
     <div class="card" style="margin-top:18px"><div style="padding:18px;display:flex;justify-content:space-between;align-items:center"><div><div class="hint">Net GST Payable to Government</div><div style="font-size:13px">Output ${cur(g.output)} − Input credit ${cur(g.input)}</div></div><div style="font-size:26px;font-weight:800;color:${g.net>=0?'var(--red)':'var(--green)'}">${cur(g.net)}</div></div></div>`;}
 
 /* ============================ REPORTS ============================ */
