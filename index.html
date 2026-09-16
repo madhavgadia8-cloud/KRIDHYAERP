@@ -669,7 +669,7 @@ views.sales=function(){
     <div class="card"><table><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>GST</th><th class="num">Total</th><th class="num">Balance</th><th>Status</th><th></th></tr></thead>
       <tbody>${list.length?list.map(i=>{const t=invTotals(i);const bal=t.total-(i.paidAmount||0);const sp=gstSplit(i);
         return `<tr><td><b>${esc(i.no)}</b></td><td>${fmtDate(i.date)}</td><td>${esc(cust(i.customerId).name)}</td><td><span class="pill ${sp.inter?'blue':'grey'}">${sp.inter?'IGST':'CGST+SGST'}</span></td><td class="num"><b>${cur(t.total)}</b></td><td class="num">${bal>0.5?cur(bal):'—'}</td><td>${statusPill(i.status)}</td>
-        <td><div class="row-actions"><button class="ico-btn" title="View / Print" onclick="openDoc('inv','${i.id}')">🖨️</button><button class="ico-btn" title="Record payment" onclick="payInvoice('${i.id}')">💵</button>${bal>0.5?`<button class="ico-btn" title="Payment reminder on WhatsApp" onclick="remindPay('${i.id}')">🔔</button>`:''}<button class="ico-btn" title="Delete" onclick="delInvoice('${i.id}')">🗑️</button></div></td></tr>`;
+        <td><div class="row-actions"><button class="ico-btn" title="View / Print" onclick="openDoc('inv','${i.id}')">🖨️</button><button class="ico-btn" title="Edit this invoice" onclick="openDoc('inv','${i.id}')">✏️</button><button class="ico-btn" title="Record payment" onclick="payInvoice('${i.id}')">💵</button>${bal>0.5?`<button class="ico-btn" title="Payment reminder on WhatsApp" onclick="remindPay('${i.id}')">🔔</button>`:''}<button class="ico-btn" title="Delete" onclick="delInvoice('${i.id}')">🗑️</button></div></td></tr>`;
       }).join(''):`<tr><td colspan="8"><div class="empty"><div class="big">🧾</div>No invoices yet.</div></td></tr>`}</tbody></table></div>`;
 };
 let draft=null,_piFromInquiry=null,_fromPI=null;
@@ -1029,7 +1029,7 @@ views.quotes=function(){
         <td class="num"><b>${cur(invTotals(q).total)}</b></td>
         <td><span class="pill ${QST[q.status]||'blue'}">${esc(q.status)}</span></td>
         <td><div class="row-actions">
-          <button class="ico-btn" title="View / Print / Share" onclick="openDoc('qt','${q.id}')">🖨️</button>
+          <button class="ico-btn" title="View / Print / Share" onclick="openDoc('qt','${q.id}')">🖨️</button><button class="ico-btn" title="Edit this quotation" onclick="openDoc('qt','${q.id}')">✏️</button>
           ${q.status!=='Converted'&&q.status!=='Accepted'?`<button class="ico-btn" title="Mark Accepted" onclick="setQuoteStatus('${q.id}','Accepted')">✅</button>`:''}
           ${q.status!=='Converted'?`<button class="ico-btn" title="Convert to Proforma (PI)" onclick="convertQuote('${q.id}')">📝</button>`:''}
           ${q.status!=='Converted'?`<button class="ico-btn" title="Convert straight to Tax Invoice" onclick="quoteToInvoice('${q.id}')">➡️</button>`:''}
@@ -1114,7 +1114,7 @@ views.proforma=function(){
     </div>
     <div class="card"><table><thead><tr><th>PI No.</th><th>Date</th><th>Valid Until</th><th>Customer</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
       <tbody>${list.length?list.map(p=>`<tr><td><b>${esc(p.no)}</b></td><td>${fmtDate(p.date)}</td><td>${p.validUntil?fmtDate(p.validUntil):'—'}</td><td>${esc(piParty(p))}${p.customerId?'':' <span class="pill blue" style="font-size:9px">lead</span>'}</td><td class="num"><b>${cur(invTotals(p).total)}</b></td><td>${p.status==='Converted'?'<span class="pill green">Converted</span>':'<span class="pill blue">Open</span>'}</td>
-        <td><div class="row-actions"><button class="ico-btn" title="View / Print / Share" onclick="openDoc('pi','${p.id}')">🖨️</button>${p.status!=='Converted'?`<button class="ico-btn" title="Convert to Tax Invoice" onclick="convertProforma('${p.id}')">➡️</button>`:''}<button class="ico-btn" title="Delete" onclick="delProforma('${p.id}')">🗑️</button></div></td></tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="big">📝</div>No proforma invoices yet. Send your first quotation.</div></td></tr>`}</tbody></table></div>`;
+        <td><div class="row-actions"><button class="ico-btn" title="View / Print / Share" onclick="openDoc('pi','${p.id}')">🖨️</button><button class="ico-btn" title="Edit this proforma" onclick="openDoc('pi','${p.id}')">✏️</button>${p.status!=='Converted'?`<button class="ico-btn" title="Convert to Tax Invoice" onclick="convertProforma('${p.id}')">➡️</button>`:''}<button class="ico-btn" title="Delete" onclick="delProforma('${p.id}')">🗑️</button></div></td></tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="big">📝</div>No proforma invoices yet. Send your first quotation.</div></td></tr>`}</tbody></table></div>`;
 };
 function newProforma(){if(!DB.products.length){toast('Add a product first');go('inventory');return;}
   _piFromInquiry=null;draft={items:[{productId:DB.products[0].id,qty:1,price:DB.products[0].price,disc:0}],discount:0,gstRate:DB.company.gstRate,customerId:DB.customers[0]?.id||''};
@@ -1239,7 +1239,7 @@ views.rfq=function(){
       <tbody>${list.length?list.map(r=>`<tr><td><b>${esc(r.no)}</b></td><td>${fmtDate(r.date)}</td><td>${r.needBy?fmtDate(r.needBy):'—'}</td><td>${esc(supp(r.supplierId).name||'—')}</td>
         <td class="num"><b>${cur(rfqNet(r))}</b></td><td><span class="pill ${RST[r.status]||'blue'}">${esc(r.status)}</span></td>
         <td><div class="row-actions">
-          <button class="ico-btn" title="View / Print / Share" onclick="openDoc('rfq','${r.id}')">🖨️</button>
+          <button class="ico-btn" title="View / Print / Share" onclick="openDoc('rfq','${r.id}')">🖨️</button><button class="ico-btn" title="Edit this RFQ" onclick="openDoc('rfq','${r.id}')">✏️</button>
           ${r.status!=='Converted'?`<button class="ico-btn" title="Enter supplier's quoted price" onclick="rfqPrices('${r.id}')">💰</button>`:''}
           ${r.status!=='Converted'?`<button class="ico-btn" title="Convert to Purchase Order" onclick="rfqToPO('${r.id}')">➡️</button>`:''}
           <button class="ico-btn" title="Edit" onclick="openDoc('rfq','${r.id}')">✏️</button>
@@ -1342,19 +1342,19 @@ views.purchases=function(){
     <div class="card"><table><thead><tr><th>PO No.</th><th>Date</th><th>Supplier</th><th class="num">Net</th><th class="num">Total</th><th class="num">Balance</th><th>Status</th><th></th></tr></thead>
       <tbody>${list.length?list.map(p=>{const bal=poGross(p)-(p.paidAmount||0);
         return `<tr><td><b>${esc(p.no)}</b></td><td>${fmtDate(p.date)}</td><td>${esc(supp(p.supplierId).name)}</td><td class="num">${cur(poNet(p))}</td><td class="num"><b>${cur(poGross(p))}</b></td><td class="num">${p.status==='Received'&&bal>0.5?cur(bal):'—'}</td><td>${statusPill(p.status)}</td>
-        <td><div class="row-actions"><button class="ico-btn" title="View / Print / Share" onclick="openDoc('po','${p.id}')">🖨️</button>${p.status!=='Received'&&p.status!=='Paid'?`<button class="ico-btn" title="Receive into stock" onclick="receivePO('${p.id}')">📥</button>`:`<button class="ico-btn" title="Record payment" onclick="payPO('${p.id}')">💵</button>`}<button class="ico-btn" title="Edit" onclick="openDoc('po','${p.id}')">✏️</button><button class="ico-btn" title="Delete" onclick="delPO('${p.id}')">🗑️</button></div></td></tr>`;
+        <td><div class="row-actions"><button class="ico-btn" title="View / Print / Share" onclick="openDoc('po','${p.id}')">🖨️</button>${p.status!=='Received'&&p.status!=='Paid'?`<button class="ico-btn" title="Receive into stock" onclick="receivePO('${p.id}')">📥</button>`:`<button class="ico-btn" title="Record payment" onclick="payPO('${p.id}')">💵</button>`}<button class="ico-btn" title="Edit items, qty, cost, date &amp; status" onclick="editPO('${p.id}')">✏️</button><button class="ico-btn" title="Delete" onclick="delPO('${p.id}')">🗑️</button></div></td></tr>`;
       }).join(''):`<tr><td colspan="8"><div class="empty"><div class="big">📦</div>No purchase orders yet.</div></td></tr>`}</tbody></table></div>`;
 };
 let pdraft=null;
 function newPO(eid){if(!DB.suppliers.length){toast('Add a supplier first');go('suppliers');return;}
-  if(eid){const p=DB.purchases.find(x=>x.id===eid);pdraft={id:eid,supplierId:p.supplierId,status:p.status,mode:p.mode,gstRate:p.gstRate,items:p.items.map(it=>({...it}))};}
-  else pdraft={supplierId:DB.suppliers[0].id,status:'Ordered',mode:'Bank',gstRate:DB.company.gstRate,items:[{productId:DB.products[0]?.id||'',qty:1,cost:DB.products[0]?.cost||0}]};
+  if(eid){const p=DB.purchases.find(x=>x.id===eid);pdraft={id:eid,no:p.no,date:p.date,supplierId:p.supplierId,status:p.status,mode:p.mode,gstRate:p.gstRate,items:p.items.map(it=>({...it}))};}
+  else pdraft={date:dateBack(0),supplierId:DB.suppliers[0].id,status:'Ordered',mode:'Bank',gstRate:DB.company.gstRate,items:[{productId:DB.products[0]?.id||'',qty:1,cost:DB.products[0]?.cost||0}]};
   poModal();}
 function editPO(id){newPO(id);}
 function poModal(){const supOpts=DB.suppliers.map(s=>`<option value="${s.id}" ${s.id===pdraft.supplierId?'selected':''}>${esc(s.name)} — ${esc(s.state||'')}</option>`).join('');
   openModal(`<div class="modal-h"><h3>${pdraft.id?'Edit':'New'} Purchase Order</h3><button class="x" onclick="closeModal()">×</button></div>
     <div class="modal-b">
-      <div class="fld-row"><div class="fld"><label>Supplier</label><select id="p_sup" onchange="renderPSum()">${supOpts}</select></div><div class="fld"><label>Date</label><input id="p_date" type="date" value="${new Date().toISOString().slice(0,10)}"></div></div>
+      <div class="fld-row"><div class="fld"><label>Supplier</label><select id="p_sup" onchange="renderPSum()">${supOpts}</select></div><div class="fld"><label>Date</label><input id="p_date" type="date" value="${pdraft.date||dateBack(0)}"></div></div>${pdraft.id?`<p class="hint" style="margin:0 0 6px">Editing <b>${esc(pdraft.no||"")}</b>. Setting status to Received adds stock once; switching it back removes it again.</p>`:""}
       <label style="font-size:12px;font-weight:600;color:var(--muted)">Items</label>
       <table class="li-table"><thead><tr><th style="width:44%">Product</th><th class="num">Qty</th><th class="num">Unit Cost</th><th class="num">Amount</th><th></th></tr></thead><tbody id="p_lines"></tbody></table>
       <button class="btn ghost sm" style="margin-top:8px" onclick="addPLine()">+ Add item</button>
@@ -1388,7 +1388,7 @@ function savePO(){pdraft.supplierId=$('#p_sup').value;pdraft.status=$('#p_status
   if(_fromRFQ){const r=rList().find(x=>x.id===_fromRFQ);if(r){r.status='Converted';r.poId=po.id;po.rfqId=r.id;}_fromRFQ=null;}
   DB.purchases.push(po);DB.company.poSeq++;save();closeModal();views.purchases();toast('Purchase order '+no+' created');}
 function makeGrn(poId,date,note){const no=DB.company.grnPrefix+'-'+String(DB.company.grnSeq).padStart(4,'0');DB.grns.push({id:uid('gr'),no,date:date||new Date().toISOString().slice(0,10),poId,note:note||''});DB.company.grnSeq++;return no;}
-function receiveGoods(poId,date,note){const po=DB.purchases.find(x=>x.id===poId);if(!po)return null;po.status='Received';po.items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=it.qty;p.cost=it.cost;}});po.paidAmount=po.mode==='Credit'?0:poGross(po);const no=makeGrn(poId,date,note);save();return no;}
+function receiveGoods(poId,date,note){const po=DB.purchases.find(x=>x.id===poId);if(!po)return null;/* Guard: never add the same PO stock twice. Already Received or Paid means the goods are in inventory - just file another GRN. */if(po.status==='Received'||po.status==='Paid'){const no2=makeGrn(poId,date,note);save();return no2;}po.status='Received';po.items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=it.qty;p.cost=it.cost;}});po.paidAmount=po.mode==='Credit'?0:poGross(po);const no=makeGrn(poId,date,note);save();return no;}
 function receivePO(id){receiveGoods(id);views.purchases();toast('Goods received — GRN created, stock updated');}
 function payPO(id){const po=DB.purchases.find(x=>x.id===id);const bal=poGross(po)-(po.paidAmount||0);
   openModal(`<div class="modal-h"><h3>Pay Supplier — ${esc(po.no)}</h3><button class="x" onclick="closeModal()">×</button></div>
