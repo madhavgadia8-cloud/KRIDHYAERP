@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kridhya ERP — Artificial Jewellery</title>
+<title>Kridhya ERP — Demi Fine Jewellery</title>
 <style>
   :root{
     --bg:#f6f4f9; --panel:#ffffff; --ink:#2b2440; --muted:#7a7390;
@@ -173,7 +173,7 @@
 <body>
 <div class="app">
   <aside class="side">
-    <div class="brand"><h1><span class="logo">K</span><span>Kridhya</span></h1><span class="tag">ARTIFICIAL JEWELLERY · ERP</span></div>
+    <div class="brand"><h1><span class="logo">K</span><span>Kridhya</span></h1><span class="tag">DEMI FINE JEWELLERY · ERP</span></div>
     <nav id="nav">
       <a data-view="dashboard" class="active"><span class="ic">📊</span><span class="t">Dashboard</span></a>
       <div class="grp">PURCHASE</div>
@@ -248,7 +248,7 @@ function seed(){
   ];
   const openInv=products.reduce((s,p)=>s+p.stock*p.cost,0);
   return {
-    company:{name:'Kridhya',tagline:'Artificial Jewellery',phone:'',email:'',address:'',gstin:'',state:'Maharashtra',gstRate:3,currency:'₹',
+    company:{name:'Kridhya',tagline:'Demi Fine Jewellery',phone:'',email:'',address:'',gstin:'',state:'Maharashtra',gstRate:3,currency:'₹',
       invPrefix:'KRD',poPrefix:'PO',piPrefix:'PI',crPrefix:'CN',grnPrefix:'GR',qtPrefix:'QT',invSeq:3,poSeq:2,piSeq:1,crSeq:1,grnSeq:1,qtSeq:1,logo:'',lastBackup:'',bankName:'',accountNo:'',ifsc:'',upi:'',
       openingCash:50000,openingInventory:openInv,openingDate:dateBack(30)},
     products,
@@ -1973,7 +1973,7 @@ function lockScreen(){
   const w=document.createElement('div');w.id='lockWrap';
   w.setAttribute('style','position:fixed;inset:0;z-index:99999;background:linear-gradient(135deg,#2e1f47,#4a3168);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit');
   w.innerHTML=`<div style="background:#fff;border-radius:18px;max-width:420px;width:100%;padding:30px 28px;box-shadow:0 20px 60px rgba(0,0,0,.35)">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px"><span style="background:#c9a227;color:#fff;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px">K</span><div><div style="font-size:20px;font-weight:700;color:#2e1f47">Kridhya</div><div style="font-size:11px;letter-spacing:1px;color:#8a7fa0">ARTIFICIAL JEWELLERY · ERP</div></div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px"><span style="background:#c9a227;color:#fff;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px">K</span><div><div style="font-size:20px;font-weight:700;color:#2e1f47">Kridhya</div><div style="font-size:11px;letter-spacing:1px;color:#8a7fa0">DEMI FINE JEWELLERY · ERP</div></div></div>
     <p id="lk_msg" style="color:#6b6180;font-size:13px;margin:14px 0 18px">Please sign in to continue.</p>
     <div id="lk_pw">
       <label style="font-size:12px;color:#6b6180;display:block;margin-bottom:4px">Login ID</label>
