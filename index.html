@@ -285,7 +285,38 @@ function seed(){
 let DB=load();
 function load(){try{const r=localStorage.getItem(DB_KEY);if(r){return migrate(JSON.parse(r));}}catch(e){}const s=seed();localStorage.setItem(DB_KEY,JSON.stringify(s));return s;}
 function migrate(d){d.expenses=d.expenses||[];d.adjustments=d.adjustments||[];d.inquiries=d.inquiries||[];d.proformas=d.proformas||[];d.company.piPrefix=d.company.piPrefix||'PI';d.company.piSeq=d.company.piSeq??1;d.returns=d.returns||[];d.company.crPrefix=d.company.crPrefix||'CN';d.company.crSeq=d.company.crSeq??1;d.company.logo=d.company.logo||'';d.company.lastBackup=d.company.lastBackup||'';d.grns=d.grns||[];d.company.grnPrefix=d.company.grnPrefix||'GR';d.company.grnSeq=d.company.grnSeq??1;d.company.openingCash=d.company.openingCash??0;d.company.openingInventory=d.company.openingInventory??d.products.reduce((s,p)=>s+p.stock*p.cost,0);d.company.openingDate=d.company.openingDate||dateBack(30);d.products.forEach(p=>p.hsn=p.hsn||HSN_DEFAULT);d.sales.forEach(s=>{s.mode=s.mode||(s.status==='Paid'?'Cash':'Credit');s.paidAmount=s.paidAmount??(s.status==='Paid'?invTotals(s).total:0);});d.purchases.forEach(p=>{p.gstRate=p.gstRate??d.company.gstRate;p.status=p.status||'Received';p.mode=p.mode||(p.status==='Paid'?'Bank':'Credit');p.paidAmount=p.paidAmount??(p.status==='Paid'?poGross(p):0);});return d;}
-function save(){localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudPushDebounced();}
+/* ============ STOCK CHANGE LOG ============
+   Every stock movement is recorded with what changed, when, and on which device.
+   Rather than patching each of the 13 places that touch p.stock, we snapshot
+   before and diff on save() - so nothing can slip through unlogged. */
+function deviceLabel(){
+  try{var d=localStorage.getItem('kridhya_device');
+    if(!d){var ua=navigator.userAgent;
+      var kind=/Android|iPhone|iPad|Mobile/i.test(ua)?'Phone':(/Mac/i.test(ua)?'Mac':(/Windows/i.test(ua)?'PC':'Device'));
+      d=kind+'-'+Math.random().toString(36).slice(2,6).toUpperCase();
+      localStorage.setItem('kridhya_device',d);}
+    return d;}catch(e){return 'Device';}
+}
+let _stkSnap=null,_stkReason='';
+function stkSnapshot(){_stkSnap={};(DB.products||[]).forEach(p=>{_stkSnap[p.id]=+p.stock||0;});}
+function stkWhy(r){_stkReason=r||'';}
+function stkDiff(){
+  if(typeof DB==='undefined'||!DB||!DB.products)return;
+  if(!_stkSnap){stkSnapshot();return;}
+  const lg=(DB.stockLog=DB.stockLog||[]);const ts=Date.now();const dev=deviceLabel();
+  (DB.products||[]).forEach(p=>{
+    const cur_=+p.stock||0;
+    const had=Object.prototype.hasOwnProperty.call(_stkSnap,p.id);
+    const was=had?_stkSnap[p.id]:0;
+    if(had&&was===cur_)return;
+    if(!had&&!cur_)return;
+    lg.unshift({t:ts,sku:p.sku||'',name:p.name||'',from:was,to:cur_,d:cur_-was,
+      why:(!had?'new product':(_stkReason||'edited')),dev:dev});
+  });
+  if(lg.length>400)lg.length=400;
+  _stkReason='';stkSnapshot();
+}
+function save(){try{stkDiff();}catch(e){}localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudPushDebounced();}
 function cloudCfg(){try{return JSON.parse(localStorage.getItem('kridhya_cloud'))||{};}catch(e){return {};}}
 function saveCloudCfg(c){localStorage.setItem('kridhya_cloud',JSON.stringify(c));}
 let _cloudTimer=null,_cloudVer=0;
@@ -299,7 +330,17 @@ async function cloudPull(silent,force){const c=cloudCfg();if(!c.on||!c.url||!c.n
         cloudStatus('⚠ cloud is empty — keeping this device’s data');
         if(!silent)toast('Cloud is empty but this device has '+mine+' records. Use “Push to cloud” to upload them.');
         return false;}
-      DB=migrate(incoming);_cloudVer=up;localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudStatus('☁ synced '+new Date().toLocaleTimeString());return true;}
+            /* SAFETY: a device still holding old data must not wipe live inventory. */
+      const prevStock={};(DB.products||[]).forEach(p=>{prevStock[p.id]=+p.stock||0;});
+      const haveUnits=Object.values(prevStock).reduce((a,b)=>a+b,0);
+      const theirUnits=(incoming.products||[]).reduce((s,p)=>s+(+p.stock||0),0);
+      if(!force&&haveUnits>0&&theirUnits===0){
+        cloudStatus('\u26a0 blocked - incoming copy has no stock');
+        if(!silent)toast('Another device sent a copy with zero stock. Kept this device\u2019s '+haveUnits+' units. Use Push to cloud here if this device is correct.');
+        return false;}
+      DB=migrate(incoming);_cloudVer=up;
+      try{_stkSnap=prevStock;stkWhy('changed on another device');stkDiff();}catch(e){}
+      localStorage.setItem(DB_KEY,JSON.stringify(DB));cloudStatus('\u2601 synced '+new Date().toLocaleTimeString());return true;}
     cloudStatus('☁ up to date');}
   else{cloudStatus('☁ cloud empty');if(!silent)await cloudPush(true);}}catch(e){cloudStatus('⚠ sync error — check URL/code');}return false;}
 function recCount(d){d=d||{};return ['products','sales','customers','purchases','rfqs','inquiries','quotes','proformas','returns','grns','expenses','suppliers','journals'].reduce((n,k)=>n+((d[k]||[]).length),0);}
@@ -572,15 +613,34 @@ function renderStockSummary(){
   }).join('')}
   </tbody><tfoot><tr><td><b>Total</b></td><td class="num"><b>${tq}</b></td><td></td><td class="num"><b>${cur(tc)}</b></td><td class="num"><b>${cur(ts)}</b></td></tr></tfoot></table>
   <p class="hint" style="padding:0 18px 14px;margin:6px 0 0">Groups come from each product's <b>Category</b>. Click a group to expand or collapse.</p></div>`;}
+function renderStockLog(){
+  const lg=(DB.stockLog||[]);
+  const fmtT=ts=>{const d=new Date(ts);return fmtDate(isoLocal(d))+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});};
+  $('#invBody').innerHTML=`<div class="card"><div class="panel-h"><h3>Stock Log — every change, when and from which device</h3><span class="hint">${lg.length} entr${lg.length===1?'y':'ies'}</span></div>
+  <table><thead><tr><th>When</th><th>Product</th><th class="num">From</th><th class="num">To</th><th class="num">Change</th><th>Reason</th><th>Device</th></tr></thead><tbody>
+  ${lg.length?lg.map(e=>`<tr><td><span class="hint">${fmtT(e.t)}</span></td>
+    <td><b>${esc(e.sku||'')}</b> <span class="hint">${esc((e.name||'').slice(0,26))}</span></td>
+    <td class="num">${e.from}</td><td class="num">${e.to}</td>
+    <td class="num"><span class="pill ${e.d>0?'green':'red'}">${e.d>0?'+':''}${e.d}</span></td>
+    <td><span class="hint">${esc(e.why||'')}</span></td><td><span class="hint">${esc(e.dev||'')}</span></td></tr>`).join('')
+   :`<tr><td colspan="7"><div class="empty"><div class="big">🗒️</div>No stock changes recorded yet.<br><span class="hint">From now on every movement is logged here.</span></div></td></tr>`}
+  </tbody></table>
+  <p class="hint" style="padding:0 18px 14px;margin:6px 0 0">Logging started when this update was installed, so earlier changes are not listed. Keeps the most recent 400 movements.</p></div>`;
+}
 views.inventory=function(){render();
   function render(filter=''){const f=filter.toLowerCase();
+    if(invTab==='log'){
+      $('#main').innerHTML=header('Inventory','Manage your jewellery catalogue &amp; stock',
+        `<button class="btn gold" onclick="editProduct()">+ Add Product</button>`)
+      +`<div class="tabs"><button onclick="invTab='items';views.inventory()">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button><button class="on">🗒️ Stock Log</button></div><div id="invBody"></div>`;
+      renderStockLog();return;}
     const list=DB.products.filter(p=>!f||p.name.toLowerCase().includes(f)||p.sku.toLowerCase().includes(f)||p.category.toLowerCase().includes(f));
     if(invTab==='summary'){$('#main').innerHTML=header('Inventory','Manage your jewellery catalogue &amp; stock',`<button class="btn gold" onclick="editProduct()">+ Add Product</button>`)
-      +`<div class="tabs"><button onclick="invTab='items';views.inventory()">📋 Items</button><button class="on">📊 Stock Summary</button></div><div id="invBody"></div>`;
+      +`<div class="tabs"><button onclick="invTab='items';views.inventory()">📋 Items</button><button class="on">📊 Stock Summary</button><button onclick="invTab='log';views.inventory()">🗒️ Stock Log</button></div><div id="invBody"></div>`;
       renderStockSummary();return;}
     $('#main').innerHTML=header('Inventory','Manage your jewellery catalogue &amp; stock',
       `<input class="search" id="invSearch" placeholder="Search name / SKU / category…" value="${esc(filter)}"><button class="btn gold" onclick="editProduct()">+ Add Product</button>`)
-    +`<div class="tabs"><button class="on">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button></div>`+`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th class="num">Stock</th><th></th></tr></thead>
+    +`<div class="tabs"><button class="on">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button><button onclick="invTab='log';views.inventory()">🗒️ Stock Log</button></div>`+`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th class="num">Stock</th><th></th></tr></thead>
       <tbody>${list.length?list.map(p=>{const m=p.price-p.cost;const mp=p.cost?Math.round(m/p.cost*100):0;const lf=p.stock<=p.reorder;
         return `<tr><td><span class="hint">${esc(p.sku)}</span></td><td><div style="display:flex;align-items:center;gap:9px">${p.image?`<img src="${p.image}" style="width:38px;height:38px;object-fit:cover;border-radius:7px;border:1px solid var(--line)">`:`<div style="width:38px;height:38px;border-radius:7px;background:#f0eaf7;display:flex;align-items:center;justify-content:center">💍</div>`}<div><b>${esc(p.name)}</b><br><span class="hint">${esc(p.material)}</span></div></div></td><td><span class="tag-cat">${esc(p.category)}</span></td><td>${esc(p.hsn)}</td><td class="num">${cur(p.cost)}</td><td class="num"><b>${cur(p.price)}</b></td><td class="num"><span class="pill ${m>0?'green':'grey'}">${mp}%</span></td><td class="num"><span class="pill ${p.stock===0?'red':lf?'amber':'blue'}">${p.stock}</span></td>
         <td><div class="row-actions"><button class="ico-btn" title="Adjust stock" onclick="adjustStock('${p.id}')">📥</button><button class="ico-btn" title="Edit" onclick="editProduct('${p.id}')">✏️</button><button class="ico-btn" title="Delete" onclick="delProduct('${p.id}')">🗑️</button></div></td></tr>`;
@@ -994,10 +1054,18 @@ function docSave(){
     rec.paidAmount=D.status==='Paid'?T.total:(D.status==='Partial'?Math.round(T.total/2):0);
   }
   if(D._id){const ex=list.find(x=>x.id===D._id);
-    if(t==='po'&&(ex.status==='Received'||ex.status==='Paid'))ex.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-(+it.qty||0));});
-    Object.assign(ex,rec);
-    if(t==='po'&&rec.status==='Received')rec.items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=(+it.qty||0);if(it.cost)p.cost=+it.cost;}});
-    save();toast(d.title+' updated');go(d.back);return;}
+    const wasRec=(t==='po'&&(ex.status==='Received'||ex.status==='Paid'));
+    const applyDoc=()=>{
+      if(t==='po')stkWhy(rec.status==='Received'?('received on '+(rec.no||'')):('un-received on '+(rec.no||'')));
+      if(wasRec)ex.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-(+it.qty||0));});
+      Object.assign(ex,rec);
+      if(t==='po'&&rec.status==='Received')rec.items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=(+it.qty||0);if(it.cost)p.cost=+it.cost;}});
+      save();toast(d.title+' updated');go(d.back);};
+    if(wasRec&&rec.status!=='Received'){
+      const units=ex.items.reduce((s,i)=>s+(+i.qty||0),0);
+      confirmBox('Remove '+units+' units from inventory?','Changing '+(ex.no||'this PO')+' from Received back to "'+rec.status+'" takes its goods back out of stock. Only do this if the goods were never actually received.',applyDoc);
+      return;}
+    applyDoc();return;}
   rec.id=uid(t);
   if(t==='inv')rec.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-(+it.qty||0));});
   if(t==='po'&&rec.status==='Received')rec.items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=(+it.qty||0);if(it.cost)p.cost=+it.cost;}});
@@ -1378,10 +1446,17 @@ function savePO(){pdraft.supplierId=$('#p_sup').value;pdraft.status=$('#p_status
   if(!pdraft.items.some(it=>it.qty>0)){toast('Add at least one item');return;}
   const items=pdraft.items.filter(it=>it.qty>0).map(it=>({...it}));
   if(pdraft.id){const po=DB.purchases.find(x=>x.id===pdraft.id);const wasReceived=(po.status==='Received'||po.status==='Paid');
-    if(wasReceived)po.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-it.qty);});
-    Object.assign(po,{supplierId:pdraft.supplierId,date,items,gstRate:pdraft.gstRate,mode:pdraft.mode,status:pdraft.status});
-    if(pdraft.status==='Received'){items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=it.qty;p.cost=it.cost;}});po.paidAmount=pdraft.mode==='Credit'?0:poGross(po);}else po.paidAmount=0;
-    save();closeModal();views.purchases();toast('Purchase order updated');return;}
+    const apply=()=>{
+      stkWhy(pdraft.status==='Received'?('received on '+po.no):('un-received on '+po.no));
+      if(wasReceived)po.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-it.qty);});
+      Object.assign(po,{supplierId:pdraft.supplierId,date,items,gstRate:pdraft.gstRate,mode:pdraft.mode,status:pdraft.status});
+      if(pdraft.status==='Received'){items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=it.qty;p.cost=it.cost;}});po.paidAmount=pdraft.mode==='Credit'?0:poGross(po);}else po.paidAmount=0;
+      save();closeModal();views.purchases();toast('Purchase order updated');};
+    if(wasReceived&&pdraft.status!=='Received'){
+      const units=po.items.reduce((s,i)=>s+(+i.qty||0),0);
+      confirmBox('Remove '+units+' units from inventory?','Changing '+po.no+' from Received back to "'+pdraft.status+'" takes its goods back out of stock. Only do this if the goods were never actually received.',apply);
+      return;}
+    apply();return;}
   const no=DB.company.poPrefix+'-'+String(DB.company.poSeq).padStart(4,'0');
   const po={id:uid('po'),no,date,supplierId:pdraft.supplierId,items,gstRate:pdraft.gstRate,mode:pdraft.mode,status:pdraft.status,paidAmount:0};
   if(pdraft.status==='Received'){items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=it.qty;p.cost=it.cost;}});po.paidAmount=pdraft.mode==='Credit'?0:poGross(po);}
@@ -2077,6 +2152,7 @@ function lockScreen(){
 /* ============================ INIT ============================ */
 function bootApp(){
 applyRoleUI();
+try{stkSnapshot();}catch(e){}
 go('dashboard');
 if(cloudCfg().on)cloudStatus('☁ connecting…');else cloudStatus('local only');
 cloudInit();
