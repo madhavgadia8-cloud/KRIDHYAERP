@@ -1815,6 +1815,34 @@ function convertInquiry(id){const q=DB.inquiries.find(x=>x.id===id);if(!DB.produ
   _qFromInquiry=id;_piFromInquiry=null;const v=new Date();v.setDate(v.getDate()+7);quoteModal(v.toISOString().slice(0,10),draft.lead.name);}
 
 /* ============================ SETTINGS ============================ */
+/* ---- Website link (read-only API the shop pulls products from) ---- */
+const API_KEY_DEFAULT='kridhya_1458a315ebb3a9fe527d78d48e6793e2c650ef014328f188';
+function apiBase(){return (DB.company.apiBase||cloudCfg().url||'').replace(/\/$/,'');}
+function apiKey(){return DB.company.apiKey||API_KEY_DEFAULT;}
+function copyField(id){const el=document.getElementById(id);if(!el)return;
+  const wasPw=el.type==='password';if(wasPw)el.type='text';
+  el.select();el.setSelectionRange(0,99999);
+  try{document.execCommand('copy');toast('Copied');}catch(e){toast('Press Ctrl+C to copy');}
+  if(wasPw)el.type='password';}
+function toggleApiKey(){const el=document.getElementById('api_key');if(!el)return;el.type=el.type==='password'?'text':'password';}
+async function testApi(){
+  const box=document.getElementById('apiResult');const st=document.getElementById('apiStatus');
+  box.innerHTML='<span class="hint">Checking…</span>';
+  try{
+    const r=await fetch(apiBase()+'/api/v1/items?per_page=100',{headers:{'Authorization':'Bearer '+apiKey()},cache:'no-store'});
+    if(r.status===401){box.innerHTML='<span style="color:var(--red)">401 — the API key was rejected.</span>';st.textContent='key rejected';return;}
+    if(!r.ok){box.innerHTML='<span style="color:var(--red)">Server replied '+r.status+'.</span>';st.textContent='error '+r.status;return;}
+    const j=await r.json();const items=(j.data||[]);
+    const live=items.filter(i=>i.stock&&i.stock.in_stock).length;
+    const noPrice=items.filter(i=>!(i.price&&i.price.selling>0)).map(i=>i.item_code);
+    box.innerHTML='<div style="color:var(--green);font-weight:600">✅ Connected — '+items.length+' product(s) visible to the website.</div>'
+      +'<div class="hint">'+live+' in stock · '+(items.length-live)+' out of stock</div>'
+      +(noPrice.length?'<div class="hint" style="color:#b8860b">⚠️ No selling price on: '+noPrice.join(', ')+' — these would show as ₹0 on the shop.</div>':'');
+    st.textContent='connected';
+  }catch(e){
+    box.innerHTML='<span style="color:var(--red)">Could not reach the server. If this keeps happening, the sync Worker is unreachable on this network.</span>';
+    st.textContent='unreachable';}
+}
 views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
   $('#main').innerHTML=header('Settings','Business details, invoice format, banking &amp; data')
   +`<div class="two-col"><div class="card"><div class="panel-h"><h3>🏪 Business Profile</h3></div><div style="padding:20px">
@@ -1849,6 +1877,16 @@ views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
       <div class="fld-row"><div class="fld"><label>Worker URL</label><input id="cl_url" value="${esc(cloudCfg().url||'')}" placeholder="https://kridhya-sync.<you>.workers.dev"></div><div class="fld"><label>Sync Code (keep private)</label><input id="cl_ns" value="${esc(cloudCfg().ns||'')}" placeholder="a long private code"><div class="hint"><a onclick="document.getElementById('cl_ns').value='kridhya-'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2)" style="color:var(--plum);cursor:pointer">generate a code</a> · use the SAME code everywhere</div></div></div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0 14px"><input type="checkbox" id="cl_on" ${cloudCfg().on?'checked':''}> Enable automatic cloud sync</label>
       <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn gold" onclick="saveCloudAndConnect()">Save &amp; Connect</button><button class="btn ghost" onclick="cloudForcePush()">⬆ Push to cloud</button><button class="btn ghost" onclick="cloudForcePull()">⬇ Pull from cloud</button></div>
+    </div></div>
+    <div class="card" style="margin-top:18px"><div class="panel-h"><h3>🛒 Website Link (API)</h3><span id="apiStatus" class="hint">not checked</span></div><div style="padding:20px">
+      <p class="hint" style="margin-top:0">Paste these into the <b>kridhya-erp-sync</b> plugin on your website, then set its <b>Source</b> to <b>api</b>. The site reads your products, prices, stock and photos straight from the ERP — no more uploading backup files by hand.</p>
+      <div class="fld"><label>Base URL</label>
+        <div style="display:flex;gap:8px"><input id="api_url" readonly value="${esc(apiBase())}" style="background:#faf8fc"><button class="btn ghost sm" onclick="copyField('api_url')">Copy</button></div></div>
+      <div class="fld" style="margin-top:10px"><label>API Key <span class="hint">(bearer token)</span></label>
+        <div style="display:flex;gap:8px"><input id="api_key" readonly type="password" value="${esc(apiKey())}" style="background:#faf8fc"><button class="btn ghost sm" onclick="toggleApiKey()">Show</button><button class="btn ghost sm" onclick="copyField('api_key')">Copy</button></div></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn gold" onclick="testApi()">Test connection</button></div>
+      <div id="apiResult" style="margin-top:12px"></div>
+      <p class="hint" style="margin-bottom:0;margin-top:14px">⚠️ Treat the API Key like a password — it lets anyone read your catalogue <b>including cost prices</b>. Don’t post it in WhatsApp or email.</p>
     </div></div>
     <div class="card" style="margin-top:18px"><div class="panel-h"><h3>🔒 Login &amp; Security</h3><span class="hint">${authOn()?'lock is ON':'lock is off'}</span></div><div style="padding:20px">
       <p class="hint" style="margin-top:0">Require a <b>Login ID &amp; password</b> before the ERP opens. If you ever forget the password, you can log in with a <b>one-time code sent to your email</b>. Email OTP needs Cloud Sync connected (it uses the same secure link).</p>
