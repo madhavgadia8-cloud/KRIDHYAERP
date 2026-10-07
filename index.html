@@ -1579,6 +1579,29 @@ function autoDraftRun(){
 }
 const VTYPES=['Journal','Payment','Receipt','Contra','Sales','Purchase','Credit Note','Debit Note'];
 const VCOL={Journal:'blue',Payment:'red',Receipt:'green',Contra:'amber',Sales:'green',Purchase:'blue','Credit Note':'red','Debit Note':'amber'};
+/* Each voucher type keeps its own number series, like Tally. */
+const VPREFIX={Journal:'JV',Payment:'PMT',Receipt:'RCP',Contra:'CTR',Sales:'SV',Purchase:'PV','Credit Note':'CN','Debit Note':'DN'};
+function vSortKey(v){return String(v.date||'')+'|'+String(v.t||v.id||'');}
+/* Re-sequence one voucher type strictly in date order so a back-dated entry
+   slots into place. Touches DB.journals only - never tax invoices, whose GST
+   series must keep its original numbers. */
+function renumberVouchers(type){
+  const px=VPREFIX[type]||'JV';
+  const list=(DB.journals||[]).filter(v=>(v.vtype||'Journal')===type&&!v.noLock)
+    .sort((a,b)=>vSortKey(a).localeCompare(vSortKey(b)));
+  let ch=0;
+  list.forEach((v,i)=>{const n=px+'-'+String(i+1).padStart(4,'0');if(v.no!==n){v.no=n;ch++;}});
+  return ch;
+}
+function renumberAllVouchers(){let c=0;VTYPES.forEach(t2=>{c+=renumberVouchers(t2);});return c;}
+function renumberNow(){const n=renumberAllVouchers();save();acctJournal();
+  toast(n?('Renumbered '+n+' voucher'+(n===1?'':'s')+' in date order'):'Already in date order');}
+function vNextNo(type,date,selfId){
+  const px=VPREFIX[type]||'JV';
+  const peers=(DB.journals||[]).filter(v=>(v.vtype||'Journal')===type&&v.id!==selfId);
+  const before=peers.filter(v=>String(v.date||'')<=String(date||'')).length;
+  return px+'-'+String(before+1).padStart(4,'0');
+}
 let _jvFilter='All';
 function acctJournal(){
   let list=(DB.journals||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
@@ -1602,6 +1625,7 @@ function acctJournal(){
   ${manualMode()?`<div class="card" style="margin-bottom:14px;border-left:4px solid var(--gold)"><div style="padding:14px 18px"><b>Manual mode is ON.</b> <span class="hint">Invoices, purchases and expenses do <b>not</b> post automatically. Use <b>🪄 Generate entries</b> above to draft them from your transactions, then edit as you like.</span></div></div>`:''}
   <div class="card"><div class="panel-h"><h3>Vouchers</h3>
     <select class="search" style="max-width:170px" onchange="_jvFilter=this.value;acctJournal()">${['All'].concat(VTYPES).map(v=>`<option ${v===_jvFilter?'selected':''}>${v}</option>`).join('')}</select>
+    <button class="btn ghost sm" title="Re-sequence every voucher series strictly in date order" onclick="renumberNow()">🔢 Renumber by date</button>
     <span class="hint">${list.length} voucher${list.length===1?'':'s'}</span></div>
   <table><thead><tr><th>Date</th><th>No.</th><th>Type</th><th>Narration</th><th>Accounts</th><th class="num">Amount</th><th></th></tr></thead><tbody>
   ${list.length?list.map(e=>{const t=jvTotals(e);const vt=e.vtype||'Journal';return `<tr><td>${fmtDate(e.date)}</td><td><span class="hint">${esc(e.no||'')}</span></td><td><span class="pill ${VCOL[vt]||'blue'}">${esc(vt)}</span></td><td>${esc(e.narr||'')}${e.party?`<br><span class="hint">${esc(e.party)}</span>`:''}</td>
@@ -1614,11 +1638,14 @@ function acctJournal(){
 function jvModal(id){
   const e=(DB.journals||[]).find(x=>x.id===id)||{date:dateBack(0),narr:'',party:'',lines:[{acc:'',dr:'',cr:''},{acc:'',dr:'',cr:''}]};
   window._jvLines=JSON.parse(JSON.stringify(e.lines&&e.lines.length?e.lines:[{acc:'',dr:'',cr:''},{acc:'',dr:'',cr:''}]));
+  window._jvEditId=id||null;
   openModal(`<div class="modal-h"><h3>${id?'Edit Journal Entry':'New Journal Entry'}</h3><button class="x" onclick="closeModal()">×</button></div>
   <div class="modal-b">
-    <div class="fld-row3"><div class="fld"><label>Date</label><input id="jv_date" type="date" value="${e.date||dateBack(0)}"></div>
-    <div class="fld"><label>Entry No.</label><input id="jv_no" value="${esc(e.no||('JV-'+((DB.journals||[]).length+1)))}"></div>
-    <div class="fld"><label>Voucher Type</label><select id="jv_type">${VTYPES.map(v=>`<option ${v===(e.vtype||'Journal')?'selected':''}>${v}</option>`).join('')}</select></div></div>
+    <div class="fld-row3"><div class="fld"><label>Date <span class="hint">(any past date)</span></label><input id="jv_date" type="date" value="${e.date||dateBack(0)}" onchange="jvDateChanged()"></div>
+    <div class="fld"><label>Voucher Type</label><select id="jv_type" onchange="jvDateChanged()">${VTYPES.map(v=>`<option ${v===(e.vtype||'Journal')?'selected':''}>${v}</option>`).join('')}</select></div>
+    <div class="fld"><label>Voucher No.</label><input id="jv_no" value="${esc(e.no||'')}" oninput="document.getElementById('jv_auto').checked=false"></div></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:2px 0 6px"><input type="checkbox" id="jv_auto" ${e.noLock?'':'checked'} onchange="jvDateChanged()"><span>Number automatically by date <span class="hint">(back-dated entries slot into the right place and the series re-sequences)</span></span></label>
+    <div id="jv_datehint" style="margin:0 0 10px"></div>
     <div class="fld"><label>Party / Reference <span class="hint">(optional)</span></label><input id="jv_party" value="${esc(e.party||'')}" placeholder="e.g. Sharma Traders"></div>
     <div class="fld"><label>Narration</label><input id="jv_narr" value="${esc(e.narr||'')}" placeholder="e.g. Shop rent paid for July"></div>
     <div id="jvLines"></div>
@@ -1626,7 +1653,7 @@ function jvModal(id){
     <div id="jvSum" style="margin-top:12px"></div>
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="jvSave('${id||''}')">Save Entry</button></div>`,true);
-  jvRender();
+  jvRender();jvDateChanged();
 }
 function jvOpts(sel){const g={};coaList().forEach(a=>{(g[a.grp]=g[a.grp]||[]).push(a.name);});
   return `<option value="">— select account —</option>`+Object.keys(GRPS).filter(k=>g[k]).map(k=>`<optgroup label="${GRPS[k]}">${g[k].sort().map(n=>`<option ${n===sel?'selected':''}>${esc(n)}</option>`).join('')}</optgroup>`).join('');}
@@ -1646,16 +1673,42 @@ function jvSum(){const L=window._jvLines;const d=L.reduce((s,l)=>s+(+l.dr||0),0)
   $('#jvSum').innerHTML=`<div style="display:flex;gap:18px;align-items:center;padding:10px 14px;border-radius:10px;background:${ok?'#eaf7ee':'#fdf1f1'}">
     <b>Debit ${cur(d)}</b><b>Credit ${cur(c)}</b>
     <span style="margin-left:auto;font-weight:700;color:${ok?'#1e7b34':'#c0392b'}">${ok?'✓ Balanced':(d||c)?'Difference '+cur(Math.abs(d-c)):'Enter amounts'}</span></div>`;}
+/* Live preview: as date or type changes, show the number this voucher will take
+   and warn if it lands in a period that is probably already filed. */
+function jvDateChanged(){
+  const dEl=$('#jv_date'),tEl=$('#jv_type'),nEl=$('#jv_no'),aEl=$('#jv_auto'),hEl=$('#jv_datehint');
+  if(!dEl||!hEl)return;
+  const date=dEl.value, type=(tEl||{}).value||'Journal';
+  if(aEl&&aEl.checked&&nEl)nEl.value=vNextNo(type,date,window._jvEditId||null);
+  const later=(DB.journals||[]).filter(v=>(v.vtype||'Journal')===type&&v.id!==(window._jvEditId||null)&&String(v.date||'')>String(date||'')).length;
+  const today=dateBack(0);
+  const m=(s)=>String(s||'').slice(0,7);
+  const oldPeriod=date&&m(date)<m(today);
+  let html='';
+  if(later>0&&aEl&&aEl.checked)
+    html+='<div class="hint">\u21aa Back-dated: this becomes <b>'+esc((nEl||{}).value||'')+'</b> and the '+later+' later '+type+' voucher'+(later===1?'':'s')+' shift up by one.</div>';
+  if(oldPeriod)
+    html+='<div class="hint" style="color:#b8860b">\u26a0\ufe0f Dated in a previous month. If that month\u2019s GST return is already filed, this entry will make your books disagree with what was filed \u2014 check with your CA.</div>';
+  hEl.innerHTML=html;
+}
 function jvSave(id){
   const lines=window._jvLines.filter(l=>l.acc&&((+l.dr||0)||(+l.cr||0))).map(l=>({acc:l.acc,dr:+l.dr||0,cr:+l.cr||0}));
   if(lines.length<2){toast('Add at least two lines with an account and amount');return;}
   const d=lines.reduce((s,l)=>s+l.dr,0), c=lines.reduce((s,l)=>s+l.cr,0);
   if(Math.abs(d-c)>0.01){toast('Debit and Credit must be equal — difference '+cur(Math.abs(d-c)));return;}
   DB.journals=DB.journals||[];
-  const rec={id:id||uid('jv'),no:$('#jv_no').value.trim(),date:$('#jv_date').value,narr:$('#jv_narr').value.trim(),party:$('#jv_party').value.trim(),vtype:($('#jv_type')||{}).value||'Journal',lines};
+  const auto=!!($('#jv_auto')||{}).checked;
+  const vtype=($('#jv_type')||{}).value||'Journal';
+  const rec={id:id||uid('jv'),no:$('#jv_no').value.trim(),date:$('#jv_date').value,narr:$('#jv_narr').value.trim(),party:$('#jv_party').value.trim(),vtype:vtype,lines,
+    t:(DB.journals.find(x=>x.id===id)||{}).t||Date.now(), noLock:!auto};
   const ex=DB.journals.find(x=>x.id===id);
   if(ex)Object.assign(ex,rec);else DB.journals.push(rec);
-  save();closeModal();toast('Entry saved');views.accounting();
+  let shifted=0;
+  if(auto)shifted=renumberVouchers(vtype);
+  const finalNo=(DB.journals.find(x=>x.id===rec.id)||{}).no||rec.no;
+  save();closeModal();
+  toast('Saved as '+finalNo+(shifted>1?(' \u00b7 '+(shifted-1)+' later voucher'+(shifted-1===1?'':'s')+' renumbered'):''));
+  views.accounting();
 }
 function jvDel(id){const e=(DB.journals||[]).find(x=>x.id===id);if(!e)return;
   confirmBox('Delete this entry?',(e.narr||'')+' — '+cur(jvTotals(e).dr),()=>{DB.journals=DB.journals.filter(x=>x.id!==id);save();toast('Entry deleted');views.accounting();});}
