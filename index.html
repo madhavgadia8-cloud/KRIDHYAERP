@@ -183,6 +183,7 @@
       <a data-view="grn"><span class="ic">📥</span><span class="t">Goods Receipt</span></a>
       <div class="grp">STOCK</div>
       <a data-view="inventory"><span class="ic">💍</span><span class="t">Inventory</span></a>
+      <a data-view="photos"><span class="ic">📷</span><span class="t">Product Photos</span></a>
       <div class="grp">SALES</div>
       <a data-view="inquiries"><span class="ic">📨</span><span class="t">Inquiries</span></a>
       <a data-view="quotes"><span class="ic">🏷️</span><span class="t">Quotations</span></a>
@@ -1971,6 +1972,123 @@ async function testApi(){
     box.innerHTML='<span style="color:var(--red)">Could not reach the server. If this keeps happening, the sync Worker is unreachable on this network.</span>';
     st.textContent='unreachable';}
 }
+/* ===================== PRODUCT PHOTOS =====================
+   Shop photos are big. Keeping them in the main record would bloat the blob
+   that syncs every second, so each product's gallery lives in its own cloud
+   row and only a small count is kept locally. */
+let _phPid=null,_phCache={},_phBusy=false;
+function phNs(pid){return (cloudCfg().ns||'')+'::ph::'+pid;}
+function phUrl(pid){return (cloudCfg().url||'').replace(/\/$/,'')+'?ns='+encodeURIComponent(phNs(pid));}
+async function phLoad(pid){
+  if(_phCache[pid])return _phCache[pid];
+  try{const r=await fetch(phUrl(pid),{cache:'no-store'});const j=await r.json();
+    const arr=j&&j.data?(JSON.parse(j.data).photos||[]):[];
+    _phCache[pid]=arr;return arr;}catch(e){return [];}
+}
+async function phSave(pid,arr){
+  _phCache[pid]=arr;
+  const p=prod(pid);
+  if(p){p.photoCount=arr.length;if(arr.length&&!p.image)p.image=arr[0];save();}
+  const r=await fetch(phUrl(pid),{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({data:JSON.stringify({photos:arr})})});
+  if(!r.ok)throw new Error('upload failed ('+r.status+')');
+}
+function phShrink(file,max,q){return new Promise((res,rej)=>{
+  const fr=new FileReader();
+  fr.onload=()=>{const img=new Image();
+    img.onload=()=>{const c=document.createElement('canvas');let w=img.width,h=img.height;
+      if(w>h&&w>max){h=h*max/w;w=max;}else if(h>=w&&h>max){w=w*max/h;h=max;}
+      c.width=Math.round(w);c.height=Math.round(h);
+      const ctx=c.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);
+      ctx.drawImage(img,0,0,c.width,c.height);
+      res(c.toDataURL('image/jpeg',q));};
+    img.onerror=()=>rej(new Error('not an image'));img.src=fr.result;};
+  fr.onerror=()=>rej(new Error('could not read file'));fr.readAsDataURL(file);});}
+async function phAdd(inp){
+  if(!_phPid){toast('Pick a product first');return;}
+  const files=[...(inp.files||[])];if(!files.length)return;
+  if(_phBusy){toast('Still uploading...');return;}
+  _phBusy=true;
+  const st=$('#phStatus');
+  try{
+    const arr=(await phLoad(_phPid)).slice();
+    for(let i=0;i<files.length;i++){
+      if(st)st.textContent='Processing '+(i+1)+' of '+files.length+'...';
+      if(!/^image\//.test(files[i].type)){toast('Skipped '+files[i].name+' - not an image');continue;}
+      arr.push(await phShrink(files[i],1000,0.8));
+    }
+    if(arr.length>12){toast('Keeping the first 12 photos for this product');arr.length=12;}
+    if(st)st.textContent='Saving to cloud...';
+    await phSave(_phPid,arr);
+    toast(files.length+' photo'+(files.length===1?'':'s')+' added');
+  }catch(e){toast('Upload failed: '+String(e.message||e));}
+  finally{_phBusy=false;inp.value='';views.photos();}
+}
+async function phDelete(i){
+  const arr=(await phLoad(_phPid)).slice();
+  confirmBox('Delete this photo?','It will be removed from the website too.',async()=>{
+    arr.splice(i,1);try{await phSave(_phPid,arr);toast('Photo deleted');}catch(e){toast('Failed: '+e.message);}views.photos();});
+}
+async function phMove(i,dir){
+  const arr=(await phLoad(_phPid)).slice();const j=i+dir;
+  if(j<0||j>=arr.length)return;
+  const tmp=arr[i];arr[i]=arr[j];arr[j]=tmp;
+  try{await phSave(_phPid,arr);}catch(e){toast('Failed: '+e.message);}
+  views.photos();
+}
+async function phCover(i){
+  const arr=(await phLoad(_phPid)).slice();
+  const pick=arr.splice(i,1)[0];arr.unshift(pick);
+  const p=prod(_phPid);
+  if(p){const img=new Image();img.onload=()=>{const c=document.createElement('canvas');
+      let w=img.width,h=img.height,max=420;
+      if(w>h&&w>max){h=h*max/w;w=max;}else if(h>=w&&h>max){w=w*max/h;h=max;}
+      c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);
+      p.image=c.toDataURL('image/jpeg',0.8);save();};
+    img.src=pick;}
+  try{await phSave(_phPid,arr);toast('Cover photo set');}catch(e){toast('Failed: '+e.message);}
+  views.photos();
+}
+function phPickProduct(pid){_phPid=pid;views.photos();}
+views.photos=async function(){
+  const cloudOk=!!(cloudCfg().on&&cloudCfg().url&&cloudCfg().ns);
+  if(!DB.products.length){$('#main').innerHTML=header('Product Photos','Upload shop photos and publish them to your website')
+    +`<div class="card"><div class="empty"><div class="big">📷</div>Add a product first, then come back to add its photos.</div></div>`;return;}
+  if(!_phPid)_phPid=DB.products[0].id;
+  const p=prod(_phPid);
+  $('#main').innerHTML=header('Product Photos','Upload shop photos and publish them to your website',
+    `<span id="phStatus" class="hint"></span>`)
+  +(cloudOk?'':`<div class="card" style="margin-bottom:14px;border-left:4px solid var(--red)"><div style="padding:14px 18px"><b>Cloud Sync is off.</b> <span class="hint">Photos are stored in the cloud so they do not slow the app down. Turn on Cloud Sync in Settings first.</span></div></div>`)
+  +`<div class="two-col" style="align-items:start">
+    <div class="card"><div class="panel-h"><h3>Products</h3><span class="hint">${DB.products.length}</span></div>
+      <div class="mini-list" style="max-height:520px;overflow:auto">
+      ${DB.products.map(x=>`<div class="it" style="cursor:pointer;${x.id===_phPid?'background:#faf8fc':''}" onclick="phPickProduct('${x.id}')">
+        <span style="display:flex;align-items:center;gap:9px">
+          ${x.image?`<img src="${x.image}" style="width:34px;height:34px;object-fit:cover;border-radius:6px">`:`<span style="width:34px;height:34px;border-radius:6px;background:#f0eaf7;display:flex;align-items:center;justify-content:center">💍</span>`}
+          <span><b>${esc(x.name)}</b><br><span class="hint">${esc(x.sku)}</span></span></span>
+        <b>${x.photoCount||0} 📷</b></div>`).join('')}
+      </div></div>
+    <div class="card"><div class="panel-h"><h3>${esc(p.name)}</h3><span class="hint">${esc(p.sku)}</span></div>
+      <div style="padding:18px">
+        <label class="btn gold" style="display:inline-block;cursor:pointer">+ Add photos
+          <input type="file" accept="image/*" multiple style="display:none" onchange="phAdd(this)" ${cloudOk?'':'disabled'}></label>
+        <span class="hint" style="margin-left:10px">Up to 12 per product. Resized to 1000px so pages load fast.</span>
+        <div id="phGrid" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:16px"><span class="hint">Loading...</span></div>
+      </div></div>
+  </div>`;
+  const arr=await phLoad(_phPid);
+  const g=$('#phGrid');if(!g)return;
+  g.innerHTML=arr.length?arr.map((src,i)=>`<div style="width:132px">
+      <div style="position:relative"><img src="${src}" style="width:132px;height:132px;object-fit:cover;border-radius:10px;border:2px solid ${i===0?'var(--gold)':'var(--line)'}">
+      ${i===0?`<span class="pill green" style="position:absolute;top:6px;left:6px">Cover</span>`:''}</div>
+      <div class="row-actions" style="margin-top:6px;justify-content:center">
+        ${i>0?`<button class="ico-btn" title="Make cover" onclick="phCover(${i})">⭐</button>`:''}
+        ${i>0?`<button class="ico-btn" title="Move left" onclick="phMove(${i},-1)">◀</button>`:''}
+        ${i<arr.length-1?`<button class="ico-btn" title="Move right" onclick="phMove(${i},1)">▶</button>`:''}
+        <button class="ico-btn" title="Delete" onclick="phDelete(${i})">🗑️</button></div>
+    </div>`).join('')
+   :`<div class="empty" style="width:100%"><div class="big">📷</div>No photos yet for ${esc(p.name)}.<br><span class="hint">The first photo you add becomes the cover shown on your website.</span></div>`;
+};
 views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
   $('#main').innerHTML=header('Settings','Business details, invoice format, banking &amp; data')
   +`<div class="two-col"><div class="card"><div class="panel-h"><h3>🏪 Business Profile</h3></div><div style="padding:20px">
