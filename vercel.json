@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/sync",
+      "destination": "https://fragrant-queen-04fc.madhavgadia8.workers.dev/"
+    },
+    {
+      "source": "/sync/:path*",
+      "destination": "https://fragrant-queen-04fc.madhavgadia8.workers.dev/:path*"
+    }
+  ]
+}
