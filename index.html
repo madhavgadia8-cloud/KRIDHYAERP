@@ -641,13 +641,41 @@ views.inventory=function(){render();
       renderStockSummary();return;}
     $('#main').innerHTML=header('Inventory','Manage your jewellery catalogue &amp; stock',
       `<input class="search" id="invSearch" placeholder="Search name / SKU / category…" value="${esc(filter)}"><button class="btn gold" onclick="editProduct()">+ Add Product</button>`)
-    +`<div class="tabs"><button class="on">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button><button onclick="invTab='log';views.inventory()">🗒️ Stock Log</button></div>`+`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th class="num">Stock</th><th></th></tr></thead>
+    +`<div class="tabs"><button class="on">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button><button onclick="invTab='log';views.inventory()">🗒️ Stock Log</button></div>`+`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Gross Wt</th><th class="num">Silver Wt</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th>Stock by plating</th><th></th></tr></thead>
       <tbody>${list.length?list.map(p=>{const m=p.price-p.cost;const mp=p.cost?Math.round(m/p.cost*100):0;const lf=p.stock<=p.reorder;
-        return `<tr><td><span class="hint">${esc(p.sku)}</span></td><td><div style="display:flex;align-items:center;gap:9px">${p.image?`<img src="${p.image}" style="width:38px;height:38px;object-fit:cover;border-radius:7px;border:1px solid var(--line)">`:`<div style="width:38px;height:38px;border-radius:7px;background:#f0eaf7;display:flex;align-items:center;justify-content:center">💍</div>`}<div><b>${esc(p.name)}</b><br><span class="hint">${esc(p.material)}</span></div></div></td><td><span class="tag-cat">${esc(p.category)}</span></td><td>${esc(p.hsn)}</td><td class="num">${cur(p.cost)}</td><td class="num"><b>${cur(p.price)}</b></td><td class="num"><span class="pill ${m>0?'green':'grey'}">${mp}%</span></td><td class="num"><span class="pill ${p.stock===0?'red':lf?'amber':'blue'}">${p.stock}</span></td>
+        return `<tr><td><span class="hint">${esc(p.sku)}</span></td><td><div style="display:flex;align-items:center;gap:9px">${p.image?`<img src="${p.image}" style="width:38px;height:38px;object-fit:cover;border-radius:7px;border:1px solid var(--line)">`:`<div style="width:38px;height:38px;border-radius:7px;background:#f0eaf7;display:flex;align-items:center;justify-content:center">💍</div>`}<div><b>${esc(p.name)}</b><br><span class="hint">${esc(p.material)}</span></div></div></td><td><span class="tag-cat">${esc(p.category)}</span></td><td>${esc(p.hsn)}</td><td class="num">${p.weight?(+p.weight).toFixed(2)+' g':'—'}</td><td class="num">${p.silverWeight?(+p.silverWeight).toFixed(2)+' g':'—'}</td><td class="num">${cur(p.cost)}</td><td class="num"><b>${cur(p.price)}</b></td><td class="num"><span class="pill ${m>0?'green':'grey'}">${mp}%</span></td>
+        <td>${(()=>{const un=platUnassigned(p);
+          const lines=PLATINGS3.map(pl=>{const v=platGet(p,pl);const low=v.reorder>0&&v.stock<=v.reorder;
+            return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;line-height:1.7"><span class="hint">${esc(pl)}</span><span><b style="color:${v.stock===0?'var(--red)':(low?'#b8860b':'var(--ink)')}">${v.stock}</b> <span class="hint">/ ro ${v.reorder}</span></span></div>`;}).join('');
+          const unLine=un>0?`<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;line-height:1.7"><span class="hint" style="color:#b8860b">Unassigned</span><span><b style="color:#b8860b">${un}</b></span></div>`:'';
+          return lines+unLine+`<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;border-top:1px solid var(--line);margin-top:3px;padding-top:3px"><span><b>Total</b></span><span class="pill ${p.stock===0?'red':lf?'amber':'blue'}">${p.stock}</span></div>`;})()}</td>
         <td><div class="row-actions"><button class="ico-btn" title="Adjust stock" onclick="adjustStock('${p.id}')">📥</button><button class="ico-btn" title="Edit" onclick="editProduct('${p.id}')">✏️</button><button class="ico-btn" title="Delete" onclick="delProduct('${p.id}')">🗑️</button></div></td></tr>`;
-      }).join(''):`<tr><td colspan="9"><div class="empty"><div class="big">💍</div>No products found.</div></td></tr>`}</tbody></table></div>`;
+      }).join(''):`<tr><td colspan="11"><div class="empty"><div class="big">💍</div>No products found.</div></td></tr>`}</tbody></table></div>`;
     const s=$('#invSearch');if(s)s.oninput=()=>{const v=s.value;render(v);const n=$('#invSearch');n.focus();n.setSelectionRange(v.length,v.length);};}
 };
+/* ============ PLATING-WISE STOCK ============
+   p.stock stays the single source of truth for the overall count, so every
+   existing flow (PO receipt, invoices, returns, reports, the website API)
+   keeps working untouched. The three plating lines are a split *within* that
+   total; whatever is not yet split shows as Unassigned. Stock can never be
+   lost by splitting, and a PO receipt simply lands in Unassigned until you
+   allocate it. */
+const PLATINGS3=['Yellow Gold','White Gold','Rose Gold'];
+function platId(pl){return pl.toLowerCase().replace(/[^a-z]/g,'');}
+function platGet(p,pl){const m=(p&&p.plating)||{};const v=m[pl]||{};return {stock:+v.stock||0,reorder:+v.reorder||0};}
+function platSplit(p){return PLATINGS3.reduce((s,pl)=>s+platGet(p,pl).stock,0);}
+function platUnassigned(p){return Math.max(0,(+p.stock||0)-platSplit(p));}
+function platRecalc(){
+  const total=+(document.getElementById('f_stock')||{}).value||0;
+  let split=0;
+  PLATINGS3.forEach(pl=>{split+=+(document.getElementById('f_pl_s_'+platId(pl))||{}).value||0;});
+  const un=total-split;
+  const el=document.getElementById('f_pl_unassigned');if(el)el.textContent=un;
+  const w=document.getElementById('f_pl_warn');if(!w)return;
+  w.innerHTML = un<0
+    ? '<span style="color:var(--red)">The plating split adds up to '+split+', which is more than the total stock of '+total+'. Raise the total or lower a plating line.</span>'
+    : (un>0?'<span>'+un+' unit'+(un===1?'':'s')+' not yet assigned to a plating.</span>':'<span style="color:var(--green)">All units assigned.</span>');
+}
 function editProduct(id){const p=id?DB.products.find(x=>x.id===id):{sku:nextSku(),name:'',category:CATEGORIES[0],material:MATERIALS[0],hsn:HSN_DEFAULT,cost:'',price:'',stock:0,reorder:5};
   _prodImg=p.image||'';
   openModal(`<div class="modal-h"><h3>${id?'Edit':'Add'} Product</h3><button class="x" onclick="closeModal()">×</button></div>
@@ -657,10 +685,22 @@ function editProduct(id){const p=id?DB.products.find(x=>x.id===id):{sku:nextSku(
       <div class="fld-row"><div class="fld"><label>Category</label><div id="catWrap" style="display:flex;gap:6px;align-items:center"></div></div><div class="fld"><label>Material / Finish</label><div id="matWrap" style="display:flex;gap:6px;align-items:center"></div></div></div>
       <div class="fld"><label>Colour</label><input id="f_col" list="colOptsP" value="${esc(p.colour||'')}" placeholder="Rose Gold / Gold / Silver — or type your own" onchange="rememberColour(this.value)"><datalist id="colOptsP">${colList().map(c=>`<option>${esc(c)}</option>`).join('')}</datalist><div class="hint">Pick one, or type any other colour — it's saved for next time.</div></div>
       <div class="fld-row3"><div class="fld"><label>HSN Code</label><input id="f_hsn" value="${esc(p.hsn)}"></div><div class="fld"><label>Cost Price (₹)</label><input id="f_cost" type="number" value="${p.cost}"></div><div class="fld"><label>Selling Price (₹)</label><input id="f_price" type="number" value="${p.price}"></div></div>
-      <div class="fld-row"><div class="fld"><label>Reorder Level</label><input id="f_reorder" type="number" value="${p.reorder}"></div><div class="fld"><label>Stock (units)</label><input id="f_stock" type="number" value="${p.stock}"><div class="hint">${id?'Change this to correct your count (records an adjustment).':'Opening stock quantity.'}</div></div></div>
+      <div class="fld-row3"><div class="fld"><label>Gross Weight (g)</label><input id="f_weight" type="number" step="0.01" value="${p.weight||''}" placeholder="e.g. 12.50"><div class="hint">Whole piece, as sold.</div></div>
+        <div class="fld"><label>Silver Weight (g)</label><input id="f_swt" type="number" step="0.01" value="${p.silverWeight||''}" placeholder="e.g. 11.20"><div class="hint">Pure 92.5 silver content.</div></div>
+        <div class="fld"><label>Reorder Level <span class="hint">(overall)</span></label><input id="f_reorder" type="number" value="${p.reorder}"></div></div>
+      <div class="fld"><label>Total Stock (units)</label><input id="f_stock" type="number" value="${p.stock}" oninput="platRecalc()"><div class="hint">${id?'Correct your overall count here.':'Opening stock quantity.'}</div></div>
+      <label style="font-size:12px;font-weight:600;color:var(--muted);margin-top:4px;display:block">Split by plating</label>
+      <table class="li-table"><thead><tr><th style="width:44%">Plating</th><th class="num">Stock</th><th class="num">Reorder level</th></tr></thead><tbody>
+        ${PLATINGS3.map(pl=>`<tr><td>${esc(pl)}</td>
+          <td class="num"><input id="f_pl_s_${platId(pl)}" type="number" min="0" value="${platGet(p,pl).stock}" oninput="platRecalc()" style="text-align:right"></td>
+          <td class="num"><input id="f_pl_r_${platId(pl)}" type="number" min="0" value="${platGet(p,pl).reorder}" style="text-align:right"></td></tr>`).join('')}
+        <tr><td><b>Unassigned</b> <span class="hint">not yet split</span></td><td class="num"><b id="f_pl_unassigned">0</b></td><td class="num"></td></tr>
+      </tbody></table>
+      <div id="f_pl_warn" class="hint" style="margin-top:6px"></div>
     </div>
     <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveProduct('${id||''}')">Save Product</button></div>`);
   renderPickers(p.category,p.material);
+  platRecalc();
 }
 /* ---- Category / Material pickers with "add your own" ---- */
 function renderPickers(cat,mat){renderPicker('cat',cat);renderPicker('mat',mat);}
@@ -696,9 +736,15 @@ function saveProduct(id){
   const g=i=>{const el=$('#'+i);return el?el.value:'';};
   const colV=g('f_col').trim();
   if(colV&&!colList().some(c=>c.toLowerCase()===colV.toLowerCase())){DB.company.colours=DB.company.colours||[];DB.company.colours.push(colV);}
-  const o={sku:g('f_sku').trim(),name:g('f_name').trim(),category:g('f_cat')||CATEGORIES[0],material:g('f_mat')||MATERIALS[0],colour:colV,hsn:g('f_hsn').trim()||HSN_DEFAULT,cost:+g('f_cost')||0,price:+g('f_price')||0,reorder:+g('f_reorder')||0,image:_prodImg};
+  const o={sku:g('f_sku').trim(),name:g('f_name').trim(),category:g('f_cat')||CATEGORIES[0],material:g('f_mat')||MATERIALS[0],colour:colV,hsn:g('f_hsn').trim()||HSN_DEFAULT,cost:+g('f_cost')||0,price:+g('f_price')||0,reorder:+g('f_reorder')||0,image:_prodImg,
+    weight:+g('f_weight')||0, silverWeight:+g('f_swt')||0};
   if(!o.name){toast('Enter a product name');return;}
   const newStock=+g('f_stock')||0;
+  const plating={};let split=0;
+  PLATINGS3.forEach(pl=>{const s=+g('f_pl_s_'+platId(pl))||0,r=+g('f_pl_r_'+platId(pl))||0;
+    plating[pl]={stock:Math.max(0,s),reorder:Math.max(0,r)};split+=Math.max(0,s);});
+  if(split>newStock){toast('Plating split is '+split+' but total stock is '+newStock+'. Fix before saving.');return;}
+  o.plating=plating;
   if(id){const p=DB.products.find(x=>x.id===id);const delta=newStock-p.stock;Object.assign(p,o);p.stock=newStock;if(delta!==0)DB.adjustments.push({id:uid('adj'),date:new Date().toISOString().slice(0,10),productId:id,qty:delta,value:delta*p.cost,note:'Edited in product form'});}
   else{o.id=uid('p');o.stock=newStock;DB.products.push(o);}
   save();closeModal();views.inventory();toast('Product saved');}
