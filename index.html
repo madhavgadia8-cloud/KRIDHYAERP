@@ -641,7 +641,7 @@ views.inventory=function(){render();
       renderStockSummary();return;}
     $('#main').innerHTML=header('Inventory','Manage your jewellery catalogue &amp; stock',
       `<input class="search" id="invSearch" placeholder="Search name / SKU / category…" value="${esc(filter)}"><button class="btn gold" onclick="editProduct()">+ Add Product</button>`)
-    +`<div class="tabs"><button class="on">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button><button onclick="invTab='log';views.inventory()">🗒️ Stock Log</button></div>`+`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Gross Wt</th><th class="num">Silver Wt</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th>Stock by plating</th><th></th></tr></thead>
+    +`<div class="tabs"><button class="on">📋 Items</button><button onclick="invTab='summary';views.inventory()">📊 Stock Summary</button><button onclick="invTab='log';views.inventory()">🗒️ Stock Log</button></div>`+`<div class="card"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>HSN</th><th class="num">Gross Wt</th><th class="num">Silver Wt</th><th class="num">Cost</th><th class="num">Price</th><th class="num">Margin</th><th>Stock by plating</th><th>Pre-Order</th><th></th></tr></thead>
       <tbody>${list.length?list.map(p=>{const m=p.price-p.cost;const mp=p.cost?Math.round(m/p.cost*100):0;const lf=p.stock<=p.reorder;
         return `<tr><td><span class="hint">${esc(p.sku)}</span></td><td><div style="display:flex;align-items:center;gap:9px">${p.image?`<img src="${p.image}" style="width:38px;height:38px;object-fit:cover;border-radius:7px;border:1px solid var(--line)">`:`<div style="width:38px;height:38px;border-radius:7px;background:#f0eaf7;display:flex;align-items:center;justify-content:center">💍</div>`}<div><b>${esc(p.name)}</b><br><span class="hint">${esc(p.material)}</span></div></div></td><td><span class="tag-cat">${esc(p.category)}</span></td><td>${esc(p.hsn)}</td><td class="num">${p.weight?(+p.weight).toFixed(2)+' g':'—'}</td><td class="num">${p.silverWeight?(+p.silverWeight).toFixed(2)+' g':'—'}</td><td class="num">${cur(p.cost)}</td><td class="num"><b>${cur(p.price)}</b></td><td class="num"><span class="pill ${m>0?'green':'grey'}">${mp}%</span></td>
         <td>${(()=>{const un=platUnassigned(p);
@@ -649,8 +649,9 @@ views.inventory=function(){render();
             return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;line-height:1.7"><span class="hint">${esc(pl)}</span><span><b style="color:${v.stock===0?'var(--red)':(low?'#b8860b':'var(--ink)')}">${v.stock}</b> <span class="hint">/ ro ${v.reorder}</span></span></div>`;}).join('');
           const unLine=un>0?`<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;line-height:1.7"><span class="hint" style="color:#b8860b">Unassigned</span><span><b style="color:#b8860b">${un}</b></span></div>`:'';
           return lines+unLine+`<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;border-top:1px solid var(--line);margin-top:3px;padding-top:3px"><span><b>Total</b></span><span class="pill ${p.stock===0?'red':lf?'amber':'blue'}">${p.stock}</span></div>`;})()}</td>
+        <td><span class="pill ${p.preOrder?'green':'grey'}" style="cursor:pointer;user-select:none" title="Click to change" onclick="togglePreOrder('${p.id}')">${p.preOrder?'Yes':'No'}</span></td>
         <td><div class="row-actions"><button class="ico-btn" title="Adjust stock" onclick="adjustStock('${p.id}')">📥</button><button class="ico-btn" title="Edit" onclick="editProduct('${p.id}')">✏️</button><button class="ico-btn" title="Delete" onclick="delProduct('${p.id}')">🗑️</button></div></td></tr>`;
-      }).join(''):`<tr><td colspan="11"><div class="empty"><div class="big">💍</div>No products found.</div></td></tr>`}</tbody></table></div>`;
+      }).join(''):`<tr><td colspan="12"><div class="empty"><div class="big">💍</div>No products found.</div></td></tr>`}</tbody></table></div>`;
     const s=$('#invSearch');if(s)s.oninput=()=>{const v=s.value;render(v);const n=$('#invSearch');n.focus();n.setSelectionRange(v.length,v.length);};}
 };
 /* ============ PLATING-WISE STOCK ============
@@ -661,6 +662,13 @@ views.inventory=function(){render();
    lost by splitting, and a PO receipt simply lands in Unassigned until you
    allocate it. */
 const PLATINGS3=['Yellow Gold','White Gold','Rose Gold'];
+/* Pre-order flag: lets you sell a piece that isn't in stock yet. Click the
+   Yes/No pill in Inventory to flip it - no need to open the product. */
+function togglePreOrder(id){
+  const p=DB.products.find(x=>x.id===id);if(!p)return;
+  p.preOrder=!p.preOrder;save();views.inventory();
+  toast(esc(p.sku)+' pre-order '+(p.preOrder?'ON':'OFF'));
+}
 function platId(pl){return pl.toLowerCase().replace(/[^a-z]/g,'');}
 function platGet(p,pl){const m=(p&&p.plating)||{};const v=m[pl]||{};return {stock:+v.stock||0,reorder:+v.reorder||0};}
 function platSplit(p){return PLATINGS3.reduce((s,pl)=>s+platGet(p,pl).stock,0);}
@@ -697,6 +705,8 @@ function editProduct(id){const p=id?DB.products.find(x=>x.id===id):{sku:nextSku(
         <tr><td><b>Unassigned</b> <span class="hint">not yet split</span></td><td class="num"><b id="f_pl_unassigned">0</b></td><td class="num"></td></tr>
       </tbody></table>
       <div id="f_pl_warn" class="hint" style="margin-top:6px"></div>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:12px 0 2px"><input type="checkbox" id="f_preorder" ${p.preOrder?'checked':''} style="margin-top:3px">
+        <span><b>Available on pre-order</b><br><span class="hint">Customers can order this even when stock is nil. Shows as Yes in Inventory and tells your website to accept orders instead of hiding it.</span></span></label>
     </div>
     <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="saveProduct('${id||''}')">Save Product</button></div>`);
   renderPickers(p.category,p.material);
@@ -737,7 +747,8 @@ function saveProduct(id){
   const colV=g('f_col').trim();
   if(colV&&!colList().some(c=>c.toLowerCase()===colV.toLowerCase())){DB.company.colours=DB.company.colours||[];DB.company.colours.push(colV);}
   const o={sku:g('f_sku').trim(),name:g('f_name').trim(),category:g('f_cat')||CATEGORIES[0],material:g('f_mat')||MATERIALS[0],colour:colV,hsn:g('f_hsn').trim()||HSN_DEFAULT,cost:+g('f_cost')||0,price:+g('f_price')||0,reorder:+g('f_reorder')||0,image:_prodImg,
-    weight:+g('f_weight')||0, silverWeight:+g('f_swt')||0};
+    weight:+g('f_weight')||0, silverWeight:+g('f_swt')||0,
+    preOrder:!!(document.getElementById('f_preorder')||{}).checked};
   if(!o.name){toast('Enter a product name');return;}
   const newStock=+g('f_stock')||0;
   const plating={};let split=0;
