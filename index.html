@@ -417,7 +417,15 @@ const supp=id=>DB.suppliers.find(s=>s.id===id)||{name:'(unknown)',state:''};
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2200);}
 function fmtDate(d){if(!d)return'';const p=String(d).slice(0,10).split('-');return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:d;}
-function invTotals(inv){const gross=inv.items.reduce((s,it)=>s+it.qty*it.price,0);const lineDisc=inv.items.reduce((s,it)=>s+(+it.disc||0),0);const disc=lineDisc+(inv.discount||0);const taxable=gross-disc;const gst=taxable*(inv.gstRate||0)/100;return{sub:gross,lineDisc,disc,taxable,gst,total:taxable+gst};}
+/* GST-inclusive selling prices. When ON, the price entered is what the
+   customer pays and GST is taken OUT of it rather than added on top. The
+   invoice still shows taxable value and CGST/SGST separately, as GST law
+   requires. Sales documents only - purchase costs stay exclusive. */
+function incGst(){return !!DB.company.priceIncludesGst;}
+function splitInc(gross,rate){const taxable=gross/(1+(+rate||0)/100);return{taxable:taxable,gst:gross-taxable,total:gross};}
+function invTotals(inv){const gross=inv.items.reduce((s,it)=>s+it.qty*it.price,0);const lineDisc=inv.items.reduce((s,it)=>s+(+it.disc||0),0);const disc=lineDisc+(inv.discount||0);const net=Math.max(0,gross-disc);
+  if(inv.gstIncl!==undefined?inv.gstIncl:incGst()){const r=splitInc(net,inv.gstRate||0);return{sub:gross,lineDisc,disc,taxable:r.taxable,gst:r.gst,total:r.total};}
+  const gst=net*(inv.gstRate||0)/100;return{sub:gross,lineDisc,disc,taxable:net,gst,total:net+gst};}
 function invCOGS(inv){return inv.items.reduce((s,it)=>s+it.qty*(prod(it.productId).cost||0),0);}
 function lastSold(pid){const recs=DB.sales.filter(i=>i.items.some(it=>it.productId===pid)).sort((a,b)=>b.date.localeCompare(a.date));for(const i of recs){const it=i.items.find(x=>x.productId===pid);if(it)return it.price;}return null;}
 function isInterState(stA,stB){if(!stA||!stB)return false;return stA.trim().toLowerCase()!==stB.trim().toLowerCase();}
@@ -911,10 +919,13 @@ function docAmt(it){return (+it.qty||0)*docRate(it)-(+it.disc||0);}
 function docTotals(){
   const sub=D.items.reduce((s,it)=>s+(+it.qty||0)*docRate(it),0);
   const disc=D.items.reduce((s,it)=>s+(+it.disc||0),0)+(+D.discount||0);
-  const taxable=Math.max(0,sub-disc);
-  const gst=taxable*(+D.gstRate||0)/100;
+  const net=Math.max(0,sub-disc);
   const inter=isInterState(DB.company.state,D.partyState||'');
-  return{sub,disc,taxable,gst,inter,cgst:gst/2,sgst:gst/2,igst:gst,total:taxable+gst};
+  const sales=(D._type==='inv'||D._type==='qt'||D._type==='pi');
+  let taxable,gst,total;
+  if(sales&&incGst()){const r=splitInc(net,D.gstRate||0);taxable=r.taxable;gst=r.gst;total=r.total;}
+  else{taxable=net;gst=net*(+D.gstRate||0)/100;total=net+gst;}
+  return{sub,disc,taxable,gst,inter,cgst:gst/2,sgst:gst/2,igst:gst,total,incl:sales&&incGst()};
 }
 views.docedit=function(){
   if(!D){go('dashboard');return;}
@@ -976,7 +987,7 @@ views.docedit=function(){
     </tbody></table>
     <button class="btn ghost sm no-print" style="margin-top:8px" onclick="D.items.push(blankItem());views.docedit()">+ Add item</button>
     <div class="dtot">
-      <div class="dr"><span>Sub Total</span><span data-t="sub">${cur(T.sub)}</span></div>
+      <div class="dr"><span>Sub Total${T.incl?' <span class="hint">(incl. GST)</span>':''}</span><span data-t="sub">${cur(T.sub)}</span></div>
       <div class="dr" data-row="disc" ${T.disc?'':'style="display:none"'}><span>Discount</span><span data-t="disc">− ${cur(T.disc)}</span></div>
       <div class="dr"><span>Taxable Value</span><span data-t="taxable">${cur(T.taxable)}</span></div>
       <div class="dr no-print"><span>GST %</span><span><input type="number" style="width:70px;text-align:right" value="${D.gstRate}" oninput="D.gstRate=+this.value||0;docRefreshTotals()"></span></div>
@@ -1105,6 +1116,9 @@ function docSave(){
   if(d.side==='cust'){rec.customerId=D.partyId||'';if(!D.partyId){rec.leadName=D.partyName;}}
   else rec.supplierId=D.partyId||'';
   if(t==='inv'){
+    /* Record which pricing mode this invoice was raised under, so flipping the
+       setting later never rewrites a document already issued. */
+    rec.gstIncl=incGst();
     const T=docTotals();
     if(!rec.customerId){ // customer is created only when the tax invoice is issued
       const c={id:uid('c'),name:D.partyName.trim(),phone:((D.partyAddr||'').match(/\d{10}/)||[''])[0],address:D.partyAddr||'',state:D.partyState||DB.company.state,gstin:D.partyGstin||''};
@@ -2150,6 +2164,8 @@ views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
   $('#main').innerHTML=header('Settings','Business details, invoice format, banking &amp; data')
   +`<div class="two-col"><div class="card"><div class="panel-h"><h3>🏪 Business Profile</h3></div><div style="padding:20px">
       <div class="fld-row"><div class="fld"><label>Business Name</label><input id="co_name" value="${esc(c.name)}"></div><div class="fld"><label>Tagline</label><input id="co_tag" value="${esc(c.tagline)}"></div></div>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:4px 0 12px"><input type="checkbox" id="co_gstincl" ${c.priceIncludesGst?'checked':''} style="margin-top:3px">
+        <span><b>Selling prices include GST</b><br><span class="hint">The price you enter is what the customer pays; GST is worked out from inside it. Quotations, proforma and tax invoices still show taxable value and CGST/SGST separately, as required. Purchase costs are unaffected.</span></span></label>
       <div class="fld-row"><div class="fld"><label>Phone</label><input id="co_phone" value="${esc(c.phone)}"></div><div class="fld"><label>Email</label><input id="co_email" value="${esc(c.email)}"></div></div>
       <div class="fld"><label>Address</label><textarea id="co_addr" rows="2">${esc(c.address)}</textarea></div>
       <div class="fld-row"><div class="fld"><label>GSTIN</label><input id="co_gstin" value="${esc(c.gstin)}"></div><div class="fld"><label>State <span class="hint">(home state for GST)</span></label><input id="co_state" value="${esc(c.state)}"></div></div>
@@ -2248,7 +2264,8 @@ async function saveUser(id){
 }
 function delUser(id){const u=(DB.company.users||[]).find(x=>x.id===id);if(!u)return;
   confirmBox('Remove '+(u.name||u.user)+'?','They will no longer be able to sign in.',()=>{DB.company.users=DB.company.users.filter(x=>x.id!==id);save();toast('User removed');go('settings');});}
-function saveSettings(){const g=i=>$('#'+i).value;Object.assign(DB.company,{name:g('co_name'),tagline:g('co_tag'),phone:g('co_phone'),email:g('co_email'),address:g('co_addr'),gstin:g('co_gstin'),state:g('co_state'),gstRate:+g('co_gst')||0,invPrefix:g('co_invp'),currency:g('co_cur')||'₹',bankName:g('co_bank'),accountNo:g('co_acc'),ifsc:g('co_ifsc'),upi:g('co_upi'),pan:g('co_pan'),banker:g('co_banker'),introText:g('co_intro'),termsText:g('co_terms'),poTerms:g('co_poterms'),openingCash:+g('co_ocash')||0,openingInventory:+g('co_oinv')||0,logo:_logoImg});save();toast('Settings saved');go('settings');}
+function saveSettings(){const g=i=>$('#'+i).value;Object.assign(DB.company,{name:g('co_name'),tagline:g('co_tag'),phone:g('co_phone'),email:g('co_email'),address:g('co_addr'),gstin:g('co_gstin'),state:g('co_state'),gstRate:+g('co_gst')||0,invPrefix:g('co_invp'),currency:g('co_cur')||'₹',bankName:g('co_bank'),accountNo:g('co_acc'),ifsc:g('co_ifsc'),upi:g('co_upi'),pan:g('co_pan'),banker:g('co_banker'),introText:g('co_intro'),termsText:g('co_terms'),poTerms:g('co_poterms'),openingCash:+g('co_ocash')||0,openingInventory:+g('co_oinv')||0,logo:_logoImg,
+  priceIncludesGst:!!(document.getElementById('co_gstincl')||{}).checked});save();toast('Settings saved');go('settings');}
 function exportData(){DB.company.lastBackup=new Date().toISOString().slice(0,10);save();const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='kridhya-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();toast('Backup downloaded');}
 function importData(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.products)throw 0;DB=migrate(d);save();toast('Data imported');go('dashboard');}catch(e){toast('Invalid backup file');}};r.readAsText(f);}
 function resetData(){confirmBox('Reset ALL data?','This restores demo sample data and erases your records. Export a backup first!',()=>{localStorage.removeItem(DB_KEY);DB=load();go('dashboard');toast('Data reset');});}
