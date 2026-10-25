@@ -184,6 +184,7 @@
       <div class="grp">STOCK</div>
       <a data-view="inventory"><span class="ic">💍</span><span class="t">Inventory</span></a>
       <a data-view="photos"><span class="ic">📷</span><span class="t">Product Photos</span></a>
+      <a data-view="weborders"><span class="ic">🛒</span><span class="t">Website Orders</span></a>
       <div class="grp">SALES</div>
       <a data-view="inquiries"><span class="ic">📨</span><span class="t">Inquiries</span></a>
       <a data-view="quotes"><span class="ic">🏷️</span><span class="t">Quotations</span></a>
@@ -2159,6 +2160,54 @@ views.photos=async function(){
         <button class="ico-btn" title="Delete" onclick="phDelete(${i})">🗑️</button></div>
     </div>`).join('')
    :`<div class="empty" style="width:100%"><div class="big">📷</div>No photos yet for ${esc(p.name)}.<br><span class="hint">The first photo you add becomes the cover shown on your website.</span></div>`;
+};
+/* ===================== WEBSITE ORDERS =====================
+   Read-only view of orders the shop has POSTed to the Worker. Deliberately
+   does not touch stock - you decide what becomes a Tax Invoice. */
+let _woCache=null,_woErr='';
+function woPayPill(s){
+  const v=String(s||'').toLowerCase();
+  if(/paid|completed|success|captured/.test(v))return 'green';
+  if(/pending|on-hold|hold|processing/.test(v))return 'amber';
+  if(/fail|cancel|refund|void/.test(v))return 'red';
+  return 'grey';
+}
+async function woLoad(force){
+  if(_woCache&&!force)return _woCache;
+  _woErr='';
+  try{
+    const r=await fetch(apiBase()+'/api/v1/orders?limit=200',{headers:{'Authorization':'Bearer '+apiKey()},cache:'no-store'});
+    if(r.status===401){_woErr='The API key was rejected.';return [];}
+    if(!r.ok){_woErr='Server replied '+r.status+'.';return [];}
+    const j=await r.json();_woCache=(j.data||[]);return _woCache;
+  }catch(e){_woErr='Could not reach the server.';return [];}
+}
+function woRefresh(){_woCache=null;views.weborders();}
+views.weborders=async function(){
+  $('#main').innerHTML=header('Website Orders','Orders placed on your shop',
+    `<button class="btn ghost" onclick="woRefresh()">↻ Refresh</button>`)
+   +`<div id="woBody"><div class="card"><div class="empty"><span class="hint">Loading…</span></div></div></div>`;
+  const list=await woLoad(false);
+  const box=$('#woBody');if(!box)return;
+  if(_woErr){box.innerHTML=`<div class="card" style="border-left:4px solid var(--red)"><div style="padding:18px"><b>Couldn’t load orders.</b> <span class="hint">${esc(_woErr)}</span><div class="hint" style="margin-top:6px">Check Settings → Website Link (API), then press Refresh.</div></div></div>`;return;}
+  if(!list.length){box.innerHTML=`<div class="card"><div class="empty"><div class="big">🧾</div>No website orders yet.<br><span class="hint">They appear here automatically as soon as your shop posts one.</span></div></div>`;return;}
+  const paid=list.filter(o=>woPayPill(o.payment_status)==='green').length;
+  const value=list.reduce((s,o)=>s+(+o.total||0),0);
+  box.innerHTML=`<div class="grid kpis" style="margin-bottom:18px">
+      <div class="card kpi b2"><div class="lbl">Orders</div><div class="val">${list.length}</div><div class="meta">${paid} paid</div></div>
+      <div class="card kpi b4"><div class="lbl">Order Value</div><div class="val">${cur0(value)}</div></div>
+    </div>
+    <div class="card"><table><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Items</th><th class="num">Total</th><th>Payment</th></tr></thead><tbody>
+    ${list.map(o=>`<tr>
+      <td><b>${esc(o.order_no)}</b>${o.status?`<br><span class="hint">${esc(o.status)}</span>`:''}</td>
+      <td>${o.order_date?fmtDate(o.order_date):'—'}</td>
+      <td>${esc(o.customer_name||'—')}${o.customer_phone?`<br><span class="hint">${esc(o.customer_phone)}</span>`:''}${o.customer_email?`<br><span class="hint">${esc(o.customer_email)}</span>`:''}</td>
+      <td>${(o.items||[]).length?(o.items||[]).map(it=>`<div style="font-size:12px;line-height:1.6">${esc(it.name||it.sku||'item')} <span class="hint">× ${it.qty}</span></div>`).join(''):'<span class="hint">—</span>'}</td>
+      <td class="num"><b>${cur(o.total||0)}</b></td>
+      <td><span class="pill ${woPayPill(o.payment_status)}">${esc(o.payment_status||'unknown')}</span>${o.payment_method?`<br><span class="hint">${esc(o.payment_method)}</span>`:''}</td>
+    </tr>`).join('')}
+    </tbody></table>
+    <p class="hint" style="padding:0 18px 14px;margin:6px 0 0">Newest first. These do not change your stock — raise a Tax Invoice when you dispatch.</p></div>`;
 };
 views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
   $('#main').innerHTML=header('Settings','Business details, invoice format, banking &amp; data')
