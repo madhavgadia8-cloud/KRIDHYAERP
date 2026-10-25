@@ -2183,6 +2183,13 @@ async function woLoad(force){
   }catch(e){_woErr='Could not reach the server.';return [];}
 }
 function woRefresh(){_woCache=null;views.weborders();}
+/* Match an order line SKU to the ERP catalogue, so the screen shows your
+   product name and whether the piece is flagged pre-order. */
+function woMatch(sku){
+  const s=String(sku||'').trim().toLowerCase();
+  if(!s)return null;
+  return (DB.products||[]).find(p=>String(p.sku||'').trim().toLowerCase()===s)||null;
+}
 views.weborders=async function(){
   $('#main').innerHTML=header('Website Orders','Orders placed on your shop',
     `<button class="btn ghost" onclick="woRefresh()">↻ Refresh</button>`)
@@ -2202,7 +2209,14 @@ views.weborders=async function(){
       <td><b>${esc(o.order_no)}</b>${o.status?`<br><span class="hint">${esc(o.status)}</span>`:''}</td>
       <td>${o.order_date?fmtDate(o.order_date):'—'}</td>
       <td>${esc(o.customer_name||'—')}${o.customer_phone?`<br><span class="hint">${esc(o.customer_phone)}</span>`:''}${o.customer_email?`<br><span class="hint">${esc(o.customer_email)}</span>`:''}</td>
-      <td>${(o.items||[]).length?(o.items||[]).map(it=>`<div style="font-size:12px;line-height:1.6">${esc(it.name||it.sku||'item')} <span class="hint">× ${it.qty}</span></div>`).join(''):'<span class="hint">—</span>'}</td>
+      <td>${(o.items||[]).length?(o.items||[]).map(it=>{
+          const p=woMatch(it.sku);
+          const label=p?esc(p.name):esc(it.name||it.sku||'item');
+          return `<div style="font-size:12px;line-height:1.6">${label} <span class="hint">× ${it.qty}</span>`
+            +(it.sku?` <span class="hint">${esc(it.sku)}</span>`:'')
+            +(p&&p.preOrder?` <span class="pill amber">pre-order</span>`:'')
+            +(!p&&it.sku?` <span class="pill red" title="No product in the ERP with this SKU">unknown SKU</span>`:'')
+            +`</div>`;}).join(''):'<span class="hint">—</span>'}</td>
       <td class="num"><b>${cur(o.total||0)}</b></td>
       <td><span class="pill ${woPayPill(o.payment_status)}">${esc(o.payment_status||'unknown')}</span>${o.payment_method?`<br><span class="hint">${esc(o.payment_method)}</span>`:''}</td>
     </tr>`).join('')}
