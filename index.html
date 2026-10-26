@@ -852,7 +852,7 @@ function payInvoice(id){const i=DB.sales.find(x=>x.id===id);const t=invTotals(i)
       <div class="fld-row"><div class="fld"><label>Amount received</label><input id="pay_amt" type="number" value="${bal>0?bal.toFixed(2):0}"></div><div class="fld"><label>Mode</label><select id="pay_mode">${['Cash','Bank','UPI'].map(m=>`<option ${m===i.mode?'selected':''}>${m}</option>`).join('')}</select></div></div></div>
     <div class="modal-f"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn gold" onclick="doPay('${id}')">Save</button></div>`);}
 function doPay(id){const i=DB.sales.find(x=>x.id===id);const amt=+$('#pay_amt').value||0;i.paidAmount=(i.paidAmount||0)+amt;i.mode=$('#pay_mode').value;const t=invTotals(i);i.status=i.paidAmount>=t.total-0.5?'Paid':(i.paidAmount>0?'Partial':'Unpaid');save();closeModal();views.sales();toast('Payment recorded');}
-function delInvoice(id){const i=DB.sales.find(x=>x.id===id);confirmBox(`Delete invoice ${i.no}?`,'Stock will be returned to inventory.',()=>{i.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock+=it.qty;});DB.sales=DB.sales.filter(x=>x.id!==id);save();views.sales();toast('Invoice deleted, stock restored');});}
+function delInvoice(id){const i=DB.sales.find(x=>x.id===id);confirmBox(`Delete invoice ${i.no}?`,i.noStock?'This came from a website order and never deducted stock, so inventory is unchanged.':'Stock will be returned to inventory.',()=>{if(!i.noStock)i.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock+=it.qty;});DB.sales=DB.sales.filter(x=>x.id!==id);save();views.sales();toast('Invoice deleted, stock restored');});}
 function viewInvoice(id){const i=DB.sales.find(x=>x.id===id);const c=cust(i.customerId);const t=invTotals(i);const sp=gstSplit(i);const co=DB.company;
   const rows=i.items.map((it,n)=>{const p=prod(it.productId);const d=+it.disc||0;const amt=it.qty*it.price-d;return `<tr><td>${n+1}</td><td>${esc(p.name)}<br><span class="hint">${esc(p.material)}</span></td><td>${esc(p.hsn)}</td><td class="num">${it.qty}</td><td class="num">${cur(it.price)}</td><td class="num">${d?cur(d):'—'}</td><td class="num">${cur(amt)}</td></tr>`;}).join('');
   const gstBlock=sp.inter?`<div class="r"><span>IGST @ ${i.gstRate}%</span><span>${cur(sp.igst)}</span></div>`:`<div class="r"><span>CGST @ ${i.gstRate/2}%</span><span>${cur(sp.cgst)}</span></div><div class="r"><span>SGST @ ${i.gstRate/2}%</span><span>${cur(sp.sgst)}</span></div>`;
@@ -930,6 +930,7 @@ function docTotals(){
 }
 views.docedit=function(){
   if(!D){go('dashboard');return;}
+  if(D._type==='inv'&&!_woCache)docLoadWebOrders();
   const t=D._type,d=DOCT[t],co=DB.company,T=docTotals();
   const people=d.side==='sup'?DB.suppliers:DB.customers;
   const gstRows=`<div class="dr" data-row="cgst" ${T.inter?'style="display:none"':''}><span data-l="cgst">CGST @ ${D.gstRate/2}%</span><span data-t="cgst">${cur(T.cgst)}</span></div><div class="dr" data-row="sgst" ${T.inter?'style="display:none"':''}><span data-l="sgst">SGST @ ${D.gstRate/2}%</span><span data-t="sgst">${cur(T.sgst)}</span></div><div class="dr" data-row="igst" ${T.inter?'':'style="display:none"'}><span data-l="igst">IGST @ ${D.gstRate}%</span><span data-t="igst">${cur(T.igst)}</span></div>`;
@@ -959,6 +960,11 @@ views.docedit=function(){
       <div class="dto"><div class="dlbl">${d.to}</div>
         <select class="no-print" onchange="docPickParty(this.value)"><option value="">— pick from ${d.side==='sup'?'suppliers':'customers'} —</option>
           ${people.map(p=>`<option value="${p.id}" ${p.id===D.partyId?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+        ${t==='inv'?`<select class="no-print" onchange="docPickWebOrder(this.value);this.value=&#39;&#39;;">
+          <option value="">— pick from website orders —</option>
+          ${(_woCache||[]).map(o=>{const inv=woInvoiceFor(o.order_no);
+            return `<option value="${esc(String(o.order_no))}">#${esc(String(o.order_no))} · ${esc(o.customer_name||'(no name)')} · ${cur(o.total||0)}${inv?' · invoiced '+esc(inv.no):''}</option>`;}).join('')}
+          </select>`:''}
         <input class="dbig" placeholder="${d.side==='sup'?'Supplier':'Customer'} name" value="${esc(D.partyName||'')}" oninput="D.partyName=this.value">
         <textarea rows="3" placeholder="Address / contact" oninput="D.partyAddr=this.value">${esc(D.partyAddr||'')}</textarea>
         <div class="drow2"><input placeholder="GSTIN" value="${esc(D.partyGstin||'')}" oninput="D.partyGstin=this.value">
@@ -1044,6 +1050,64 @@ function docPickProd(i,pid){const it=D.items[i];it.productId=pid;
     if(p.colour)it.colour=p.colour;
     if(D._type==='po'||D._type==='rfq')it.cost=p.cost||0;else it.price=p.price||0;}
   views.docedit();}
+/* ---- Fill a Tax Invoice from a website order ----
+   The feed gives line_total EX-GST plus line_tax, shipping untaxed. We
+   rebuild each line at its GROSS, then let the document GST mode show it.
+   A Round Off line absorbs float noise so the total matches the payment. */
+async function docLoadWebOrders(){
+  if(_woCache)return _woCache;
+  await woLoad(false);
+  if(D&&D._type==='inv')views.docedit();
+  return _woCache||[];
+}
+function docPickWebOrder(no){
+  if(!no)return;
+  const o=(_woCache||[]).find(x=>String(x.order_no)===String(no));
+  if(!o){toast('Order not loaded - try again');return;}
+  const already=woInvoiceFor(no);
+  const fill=()=>{
+    const rate=+D.gstRate||0;
+    const toEntered=g=>incGst()?g:(g/(1+rate/100));
+    D.webOrderNo=String(o.order_no);
+    D.noStock=true;
+    D.ref='Website order #'+o.order_no;
+    D.partyId='';
+    D.partyName=o.customer_name||'';
+    D.partyAddr=[o.address,o.customer_phone?('Phone: '+o.customer_phone):'',o.customer_email||''].filter(Boolean).join('\n');
+    D.partyState=woState((o.address||'').split(', ').slice(-2)[0]||'')||DB.company.state||'';
+    D.partyGstin=o.customer_gstin||'';
+    D.status=/paid|completed|success|captured/i.test(o.payment_status||'')?'Paid':'Unpaid';
+    if(o.payment_method)D.mode=o.payment_method;
+    if(o.order_date)D.date=o.order_date;
+    let gross=0;const missing=[];
+    const lines=(o.items||[]).map(it=>{
+      const p=woMatch(it.sku);
+      const qty=+it.qty||1;
+      const unitGross=Math.round(((+it.price||0)*(1+rate/100))*100)/100;
+      gross+=unitGross*qty;
+      const b=blankItem();
+      b.productId=p?p.id:'';
+      b.desc=(p?p.name:(it.name||it.sku||'Item'))+(p&&p.preOrder?' (pre-order)':'')+(p?'':'  SKU '+(it.sku||'?')+' NOT IN ERP');
+      b.colour=p?(p.colour||''):'';
+      b.qty=qty;
+      b.price=toEntered(unitGross);
+      if(!p&&it.sku)missing.push(it.sku);
+      return normItem(b);
+    });
+    const ship=+o.shipping||0;
+    if(ship>0){const b=blankItem();b.desc='Shipping';b.qty=1;b.price=toEntered(ship);gross+=ship;lines.push(normItem(b));}
+    const diff=Math.round(((+o.total||0)-gross)*100)/100;
+    if(Math.abs(diff)>=0.01){const b=blankItem();b.desc='Round Off';b.qty=1;b.price=toEntered(diff);lines.push(normItem(b));}
+    D.items=lines.length?lines:[blankItem()];
+    views.docedit();
+    toast(missing.length?('Filled from #'+o.order_no+' - '+missing.length+' SKU not found: '+missing.join(', ')):('Filled from website order #'+o.order_no));
+  };
+  if(already){
+    confirmBox('Order #'+no+' is already invoiced','It was billed as '+already.no+'. A second invoice would charge the customer twice. Open '+already.no+' instead, or continue only if you are deliberately re-issuing it.',fill);
+    return;
+  }
+  fill();
+}
 function docPickParty(id){const d=DOCT[D._type];const p=(d.side==='sup'?DB.suppliers:DB.customers).find(x=>x.id===id);
   if(!p){D.partyId='';views.docedit();return;}
   D.partyId=p.id;D.partyName=p.name;D.partyAddr=[p.address,p.phone].filter(Boolean).join('\n');D.partyGstin=p.gstin||'';D.partyState=p.state||'';
@@ -1141,7 +1205,10 @@ function docSave(){
       return;}
     applyDoc();return;}
   rec.id=uid(t);
-  if(t==='inv')rec.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-(+it.qty||0));});
+  /* Invoices from a website order leave stock alone - the shop already
+     accounted for those units. noStock is stamped so a later edit cannot
+     quietly start deducting. */
+  if(t==='inv'&&!rec.noStock)rec.items.forEach(it=>{const p=prod(it.productId);if(p)p.stock=Math.max(0,p.stock-(+it.qty||0));});
   if(t==='po'&&rec.status==='Received')rec.items.forEach(it=>{const p=prod(it.productId);if(p){p.stock+=(+it.qty||0);if(it.cost)p.cost=+it.cost;}});
   list.push(rec);
   DB.company[d.sq]=(DB.company[d.sq]||1)+1;
