@@ -1017,6 +1017,7 @@ views.docedit=function(){
     ${t==='inv'?`<div class="no-print" style="display:flex;gap:12px;margin-top:10px">
       <div class="fld"><label>Payment Status</label><select onchange="D.status=this.value">${['Paid','Partial','Unpaid'].map(s=>`<option ${s===D.status?'selected':''}>${s}</option>`).join('')}</select></div>
       <div class="fld"><label>Mode</label><select onchange="D.mode=this.value">${MODES.map(s=>`<option ${s===D.mode?'selected':''}>${s}</option>`).join('')}</select></div></div>`:''}
+    ${D.webOrderNo?`<div class="no-print" style="margin-top:10px"><span class="pill blue">From website order ${esc(D.webOrderNo)}</span></div>`:''}
     ${t==='po'?`<div class="no-print" style="margin-top:10px;max-width:220px"><div class="fld"><label>Status</label><select onchange="D.status=this.value">${['Draft','Ordered','Received'].map(s=>`<option ${s===D.status?'selected':''}>${s}</option>`).join('')}</select><div class="hint">Stock updates when set to Received.</div></div></div>`:''}
     <div class="dsign">For <b>${esc(co.name)}</b><br><br><br><span class="hint">Authorised Signatory</span></div>
   </div>`;
@@ -2165,6 +2166,45 @@ views.photos=async function(){
    Read-only view of orders the shop has POSTed to the Worker. Deliberately
    does not touch stock - you decide what becomes a Tax Invoice. */
 let _woCache=null,_woErr='';
+/* WooCommerce sends state codes ("RJ"); the ERP compares full names to decide
+   CGST+SGST vs IGST, so translate or an in-state sale is taxed as interstate. */
+const IN_STATES={AN:'Andaman and Nicobar Islands',AP:'Andhra Pradesh',AR:'Arunachal Pradesh',AS:'Assam',BR:'Bihar',CH:'Chandigarh',CT:'Chhattisgarh',CG:'Chhattisgarh',DL:'Delhi',GA:'Goa',GJ:'Gujarat',HR:'Haryana',HP:'Himachal Pradesh',JK:'Jammu and Kashmir',JH:'Jharkhand',KA:'Karnataka',KL:'Kerala',LA:'Ladakh',LD:'Lakshadweep',MP:'Madhya Pradesh',MH:'Maharashtra',MN:'Manipur',ML:'Meghalaya',MZ:'Mizoram',NL:'Nagaland',OR:'Odisha',OD:'Odisha',PY:'Puducherry',PB:'Punjab',RJ:'Rajasthan',SK:'Sikkim',TN:'Tamil Nadu',TG:'Telangana',TS:'Telangana',TR:'Tripura',UP:'Uttar Pradesh',UK:'Uttarakhand',UT:'Uttarakhand',WB:'West Bengal'};
+function woState(s){
+  const v=String(s||'').trim();
+  if(!v)return '';
+  if(IN_STATES[v.toUpperCase()])return IN_STATES[v.toUpperCase()];
+  return v;
+}
+/* An order is invoiced once. The invoice carries the order number so a second
+   press opens the existing invoice rather than billing the customer twice. */
+function woInvoiceFor(no){return (DB.sales||[]).find(s=>String(s.webOrderNo||'')===String(no));}
+function woToInvoice(no){
+  const o=(_woCache||[]).find(x=>String(x.order_no)===String(no));
+  if(!o){toast('Order not found - press Refresh');return;}
+  const existing=woInvoiceFor(no);
+  if(existing){toast('Already invoiced as '+existing.no+' - opening it');openDoc('inv',existing.id);return;}
+  openDoc('inv');
+  D.webOrderNo=String(o.order_no);
+  if(o.order_date)D.date=o.order_date;
+  D.partyName=o.customer_name||'';
+  D.partyAddr=[o.address,o.customer_phone?('Phone: '+o.customer_phone):'',o.customer_email||''].filter(Boolean).join('\n');
+  D.partyState=woState(o.address&&o.address.split(', ').slice(-2)[0])||DB.company.state||'';
+  D.status=/paid|completed|success|captured/i.test(o.payment_status||'')?'Paid':'Unpaid';
+  if(o.payment_method)D.mode=o.payment_method;
+  const lines=(o.items||[]).map(it=>{
+    const p=woMatch(it.sku);
+    const b=blankItem();
+    b.productId=p?p.id:'';
+    b.desc=p?(p.name+(p.material?' - '+p.material:'')):(it.name||it.sku||'Item');
+    b.qty=+it.qty||1;
+    b.price=+it.price||0;
+    return normItem(b);
+  });
+  D.items=lines.length?lines:[blankItem()];
+  views.docedit();
+  const unknown=(o.items||[]).filter(it=>it.sku&&!woMatch(it.sku)).length;
+  toast('Invoice drafted from order '+o.order_no+(unknown?(' \u00b7 '+unknown+' line(s) had no matching product'):'')+' - review, then Save');
+}
 function woPayPill(s){
   const v=String(s||'').toLowerCase();
   if(/paid|completed|success|captured/.test(v))return 'green';
@@ -2204,7 +2244,7 @@ views.weborders=async function(){
       <div class="card kpi b2"><div class="lbl">Orders</div><div class="val">${list.length}</div><div class="meta">${paid} paid</div></div>
       <div class="card kpi b4"><div class="lbl">Order Value</div><div class="val">${cur0(value)}</div></div>
     </div>
-    <div class="card"><table><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Items</th><th class="num">Total</th><th>Payment</th></tr></thead><tbody>
+    <div class="card"><table><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Items</th><th class="num">Total</th><th>Payment</th><th>Invoice</th></tr></thead><tbody>
     ${list.map(o=>`<tr>
       <td><b>${esc(o.order_no)}</b>${o.status?`<br><span class="hint">${esc(o.status)}</span>`:''}</td>
       <td>${o.order_date?fmtDate(o.order_date):'—'}</td>
@@ -2219,9 +2259,13 @@ views.weborders=async function(){
             +`</div>`;}).join(''):'<span class="hint">—</span>'}</td>
       <td class="num"><b>${cur(o.total||0)}</b></td>
       <td><span class="pill ${woPayPill(o.payment_status)}">${esc(o.payment_status||'unknown')}</span>${o.payment_method?`<br><span class="hint">${esc(o.payment_method)}</span>`:''}</td>
+      <td>${(()=>{const inv=woInvoiceFor(o.order_no);
+        return inv
+          ? `<button class="btn ghost sm" onclick="openDoc('inv','${inv.id}')">${esc(inv.no)}</button><br><span class="hint">invoiced</span>`
+          : `<button class="btn gold sm" onclick="woToInvoice('${esc(String(o.order_no))}')">Create Invoice</button>`;})()}</td>
     </tr>`).join('')}
     </tbody></table>
-    <p class="hint" style="padding:0 18px 14px;margin:6px 0 0">Newest first. These do not change your stock — raise a Tax Invoice when you dispatch.</p></div>`;
+    <p class="hint" style="padding:0 18px 14px;margin:6px 0 0">Newest first. Orders alone don’t change stock — <b>Create Invoice</b> opens a normal Tax Invoice pre-filled from the order, which you can edit before saving. Saving it is what issues the GST number and deducts stock. Each order can only be invoiced once.</p></div>`;
 };
 views.settings=function(){const c=DB.company;_logoImg=c.logo||'';
   $('#main').innerHTML=header('Settings','Business details, invoice format, banking &amp; data')
